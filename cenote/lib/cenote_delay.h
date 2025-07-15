@@ -1,7 +1,7 @@
 #pragma once
 
-#ifndef DSY_HUGODELAY_H
-#define DSY_HUGODELAY_H
+#ifndef CENOTE_DELAY_H
+#define CENOTE_DELAY_H
 
 #include <cmath>
 #include <cstdint>
@@ -14,11 +14,11 @@ using namespace daisysp;
 
 namespace daisysp
 {
-class HDelayEngine
+class CenoteDelayEngine
 {
   public:
-    HDelayEngine() {}
-    ~HDelayEngine() {}
+    CenoteDelayEngine() {}
+    ~CenoteDelayEngine() {}
 
     void Init(float sample_rate, float fade_time_ms = 20.0f)
     {
@@ -48,7 +48,7 @@ class HDelayEngine
 
     }
 
-    float Process(float in)
+    float Process(float in, bool clip = true, bool limit = false)
     {
         // smooth the wet sign
         fonepole(wet_, wet_target_, wet_coeff_);
@@ -66,8 +66,9 @@ class HDelayEngine
         // shift pitch
         if (bypass_freqshift_)
             freqshifter_.SetShift(0.0f);
-        line_in = freqshifter_.Process(line_in);
 
+        line_in = freqshifter_.Process(line_in);
+            
         // filter edges
         lopass_.Process(line_in);
         line_in = lopass_.Low();
@@ -77,10 +78,14 @@ class HDelayEngine
 
         line_in = SoftClip(line_in);
 
+        // apply limiter
+        line_in = SoftLimit(line_in);
+
         del_.Write(line_in);
 
         // dry/wet
         const float out = delayed * wet_;
+
         return out;
     }
 
@@ -132,7 +137,6 @@ class HDelayEngine
     Svf lopass_; // Low-pass filter for feedback smoothing
     Svf hipass_; // High-pass filter for feedback smoothing
 
-
     float feedback_;
     float delay_;         // smoothed current delay length (in samples)
     float delay_target_;  // target delay length (in samples)
@@ -150,4 +154,4 @@ class HDelayEngine
 
 
 
-#endif // DSY_HUGODELAY_H
+#endif // CENOTE_DELAY_H
