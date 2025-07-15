@@ -129,9 +129,9 @@ class CenoteDelayEngine
 
   private:
     float sample_rate_;
-    static constexpr int32_t kDelayLength = 2 * 48000; // enough for ~2 s @48kHz (adjust if needed)
+    static constexpr int32_t kDelayLength = 1 * 48000; // enough for ~2 s @48kHz 
 
-    FrequencyShifter freqshifter_; // Pitch shifter engine, if needed
+    FrequencyShifter freqshifter_; 
     bool bypass_freqshift_ = false; // Bypass frequency shifting
 
     Svf lopass_; // Low-pass filter for feedback smoothing

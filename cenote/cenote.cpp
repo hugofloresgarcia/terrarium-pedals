@@ -69,7 +69,7 @@ void processTerrariumControls() {
     led2.Set(fsw2 ? 1.0f : 0.0f);
 
     // set knob_delaytime to delay time
-    float delay_time_mult = sw3 ? 1.0f : 0.1f; // 0.5x if sw3 is pressed, otherwise 1.0x
+    float delay_time_mult = sw3 ? 1.0f : 0.075f; // 0.5x if sw3 is pressed, otherwise 1.0x
     del.SetDelayMs(knob_delaytime.Value() * del.GetMaxDelayMs() * delay_time_mult); //
 
     // set knob_delayfb to feedback
