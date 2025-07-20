@@ -79,7 +79,8 @@ class CenoteDelayEngine
         line_in = SoftClip(line_in);
 
         // apply limiter
-        line_in = SoftLimit(line_in);
+        if (limit)
+            line_in = SoftLimit(line_in);
 
         del_.Write(line_in);
 
@@ -129,7 +130,7 @@ class CenoteDelayEngine
 
   private:
     float sample_rate_;
-    static constexpr int32_t kDelayLength = 1 * 48000; // enough for ~2 s @48kHz 
+    static constexpr int32_t kDelayLength = 1.5 * 48000; // enough for ~2 s @48kHz 
 
     FrequencyShifter freqshifter_; 
     bool bypass_freqshift_ = false; // Bypass frequency shifting
