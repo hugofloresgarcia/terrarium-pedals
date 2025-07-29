@@ -11,6 +11,14 @@
 namespace daisysp
 {
 
+inline float linlin(float x, float a, float b, float c, float d) {
+if (x <= a)
+    return c;
+if (x >= b)
+    return d;
+return (x - a) / (b - a) * (d - c) + c;
+}
+
 /**  
     @brief Single Chorus engine. Used in Chorus.
     @author Ben Sergentanis
@@ -26,29 +34,34 @@ class VibratoEngine
         sample_rate_ = sample_rate;
         del_.Init();
         feedback_ = .2f;
-        SetDelay(.75);
+        SetDelayMs(40.f);
 
         lfo_.Init(sample_rate);
         lfo_.SetWaveform(Oscillator::WAVE_SIN);
         lfo_.Reset();
         lfo_.SetFreq(0.5f); // 0.5 Hz
-        lfo_.SetAmp(0.5f);  // 50% depth
+
+
     }
 
     float Process(float in)
     {
+        fonepole(depth_, depth_target_, 0.00007f);
+        // depth_ = depth_target_;
+        this->SetDelayMs(max_delay_ms_ * depth_);
+        
         fonepole(delay_, delay_target_, 0.00007f);
 
-        fonepole(depth_, depth_target_, 0.00007f);
+        float lfo_sig = linlin(lfo_.Process(), -1.f, 1.f, 0.f, depth_) * delay_;
         
-        lfo_.SetAmp(depth_);
-
-        float lfo_sig = ProcessLfo() * delay_;
         // smooth delay time
-        del_.SetDelay(lfo_sig + delay_);
+        del_.SetDelay(lfo_sig);
         float out = del_.Read();
         del_.Write(in + out * feedback_);
-        // return (in + out) * .5f; // equal mix
+
+        fonepole(mix_, mix_target_, 0.00007f);
+        mix_ = fclamp(mix_, 0.f, 1.f); // clamp mix to 0-1
+        out = mix_ * out + (1.0f - mix_) * in; // mix input and output
         return out;
     }
 
@@ -64,26 +77,25 @@ class VibratoEngine
 
     void SetDelay(float delay)
     {
-        delay = (.1f + delay * max_delay_ms_); // 0.1 to 8 ms
+        delay = (.05f + delay * max_delay_ms_); // 0.05 to 8 ms
         SetDelayMs(delay);
     }
 
     void SetDelayMs(float ms)
     {
-        ms = fmax(.1f, ms);
+        ms = fmax(.04f, ms);
         // delay_ = ms * .001f * sample_rate_;
         delay_target_ = ms * 0.001f * sample_rate_;
     }
 
-    // void SetMaxDelayMs(float ms)
-    // {
-    //     max_delay_ms_ = fmax(4.f, ms);
-    //     max_delay_ms_ = fmin(kMaxDelayMs, max_delay_ms_);
-    // }
-
     void SetFeedback(float feedback)
     {
         feedback_ = fclamp(feedback, 0.f, 1.f);
+    }
+
+    void SetMix(float mix)
+    {
+        mix_target_ = fclamp(mix, 0.f, 1.f);
     }
 
   private:
@@ -97,16 +109,15 @@ class VibratoEngine
     float depth_ = 0.f;         // current depth
     float depth_target_ = 0.f; // target depth
 
-    float max_delay_ms_ = 40.f; // max delay time in ms
+    float max_delay_ms_ = 50.f; // max delay time in ms
 
     Oscillator lfo_;
 
     DelayLine<float, kDelayLength> del_;
 
-    float ProcessLfo()
-    {
-        return lfo_.Process();
-    }
+
+    float mix_ = 1.0f; // mix level, 0.0 - 1.0
+    float mix_target_ = 1.0f; // target mix level, 0.0 - 1.0
 };
 
 } // namespace daisysp

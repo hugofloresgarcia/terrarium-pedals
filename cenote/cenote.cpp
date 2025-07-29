@@ -64,28 +64,19 @@ void processTerrariumControls() {
     // toggle footswitches
     if(fsw1_re) {
         fsw1 = !fsw1;
+        if (fsw1) {fsw2 = false;} // if fsw1 is pressed, disengage fsw2
     }
     
     if(fsw2_re) {
         fsw2 = !fsw2;
-    }
-
-    if ((fsw1_re || fsw2_re) && control_recorder.GetState() == 
-            TerrariumControlRecorder::CtrlRecorderState::PLAYING) {
-        control_recorder.StopPlaying();
-        fsw1 = false; 
-        fsw2 = false; 
+        if (fsw2) {fsw1 = false;} // if fsw2 is pressed, disengage fsw1
     }
 
     if (fsw1_pressed && fsw1_time_held > 150.0f) {
         fsw1_momentary = true;
     } else if (fsw1_falling && fsw1_momentary) {
         fsw1_momentary = false;
-
-        // only disengage bypass mode if control recorder is idle
-        if (control_recorder.GetState() == TerrariumControlRecorder::CtrlRecorderState::IDLE) {
-            fsw1 = false; 
-        }
+        fsw1 = false; // disengage bypass mode
     }
 
     // TODO: fsw2 is held pressed for longer than 300ms, it is in temporary bypass mode
@@ -95,23 +86,6 @@ void processTerrariumControls() {
     } else if (fsw2_falling && fsw2_momentary) {
         fsw2_momentary = false;
         fsw2 = false; // disengage bypass mode
-    }
-
-    // if both footswitches are in momentary mode, start recording
-    if (fsw1_momentary && fsw2_momentary) {
-        if (control_recorder.GetState() == 
-            TerrariumControlRecorder::CtrlRecorderState::IDLE) {
-            control_recorder.StartRecording();
-            control_recorder.SetListenForOverrides(false);
-        }
-    }
-    else if (fsw1_falling || fsw2_falling) {
-        // if both footswitches are released, stop recording
-        if (control_recorder.GetState() == 
-            TerrariumControlRecorder::CtrlRecorderState::RECORDING) {
-            control_recorder.StartPlaying();
-            control_recorder.SetListenForOverrides(true);
-        }
     }
 
     // update knob values
@@ -125,20 +99,6 @@ void processTerrariumControls() {
 
     led1.Set(fsw1 ? 1.0f : 0.0f);
     led2.Set(fsw2 ? 1.0f : 0.0f);
-    
-    if (control_recorder.GetState() == TerrariumControlRecorder::CtrlRecorderState::PLAYING &&
-        control_recorder.GetIndex() < 32) {
-        led1.Set(0.0f); // blink off to indicate cycle restart
-    }
-    // if (control_recorder.GetState() == TerrariumControlRecorder::CtrlRecorderState::PLAYING) {
-    //     // alternate on and off every 64 indices 
-    //     uint32_t blink_index_div = control_recorder.GetIndex() / 64;
-    //     if (blink_index_div % 2 == 0) {
-    //         led2.Set(1.0f); // blink on
-    //     } else {
-    //         led2.Set(0.0f); // blink off
-    //     }
-    // }
 
     sw1 = hw.switches[Terrarium::SWITCH_1].Pressed();
     sw2 = hw.switches[Terrarium::SWITCH_2].Pressed();
@@ -152,31 +112,6 @@ void processTerrariumControls() {
     knob_vibdepth_val = knob_vibdepth.Value();
     knob_vibrate_val = knob_vibrate.Value();
     knob_shiftamt_val = knob_shiftamt.Value();
-
-    // CONTROL RECORDER STUFF
-    float pots[6] = {
-        knob_delaytime_val,
-        knob_delayfb_val,
-        knob_level_val,
-        knob_vibdepth_val,
-        knob_vibrate_val,
-        knob_shiftamt_val
-    };
-    bool switches[4] = {sw1, sw2, sw3, sw4};
-
-    control_recorder.Process(pots, switches);
-
-    // Update the knobs and switches with the recorded values
-    knob_delaytime_val = pots[0];
-    knob_delayfb_val = pots[1];
-    knob_level_val = pots[2];
-    knob_vibdepth_val = pots[3];
-    knob_vibrate_val = pots[4];
-    knob_shiftamt_val = pots[5];
-    sw1 = switches[0];
-    sw2 = switches[1];
-    sw3 = switches[2];
-    sw4 = switches[3];
 
     // CONFIGURE THE ENGINES
 
@@ -201,12 +136,15 @@ void processTerrariumControls() {
     // set knob_vibdepth to vibrato depth
     // if sw1 is pressed, set it to "extreme" depth
     // otherwise, set it to a fraction of the knob value
-    vibrato.SetLfoDepth(
-        sw1 ? 0.9f : knob_vibdepth_val * 0.25f
-    );
+    float lfodepth = sw1 ? 1.0f : knob_vibdepth_val * 0.5f; // 1.0 if sw1 is pressed, otherwise 0.25x knob value
+    vibrato.SetLfoDepth(lfodepth);
+    vibrato.SetLfoFreq(knob_vibrate_val * 15.0f + 0.1f);
 
-    // set knob_vibrate to vibrato frequency
-    vibrato.SetLfoFreq(knob_vibrate_val * 15.0f);
+    // disable vibrato at too low depth to avoid latency
+    knob_vibdepth_val < 0.1f ? vibrato.SetMix(0.0f) : vibrato.SetMix(1.0f);
+
+    led1.Update();
+    led2.Update();
 
 }
 
@@ -221,9 +159,6 @@ void callback(
 {
     hw.ProcessAllControls();
     processTerrariumControls();
-    
-    led1.Update();
-    led2.Update();
 
     float del_out;
     float sig;
@@ -259,10 +194,10 @@ void callback(
         del_out = knob_level.Value() * del_out; // apply level control
         
         // mix delay
-        out[i] = sig + del_out;
+        sig = sig + del_out;
         
         // softclip out
-        out[i] = SoftClip(out[i]); // Soft clipping
+        out[i] = SoftClip(sig); // Soft clipping
 
     }
 }
@@ -273,6 +208,9 @@ int main(void)
 
     hw.Init();
     sr = hw.AudioSampleRate();
+    hw.SetAudioBlockSize(4);
+    hw.seed.StartLog(false);
+    // hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_96KHZ);
 
     led1.Init(hw.seed.GetPin(Terrarium::LED_1), false);
     led2.Init(hw.seed.GetPin(Terrarium::LED_2), false);
@@ -283,7 +221,7 @@ int main(void)
     knob_delayfb.Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::EXPONENTIAL);
     knob_level.Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::EXPONENTIAL);
     knob_vibrate.Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_vibdepth.Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob_vibdepth.Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
     knob_shiftamt.Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
 
     // Set sr for your processing like so:
@@ -300,7 +238,6 @@ int main(void)
     bypass_ramp.Init(sr);
 
     control_recorder.Init(); // Initialize control recorder
-
     // bypass = false;
 
     hw.StartAdc();
@@ -309,6 +246,7 @@ int main(void)
     while(1)
     {
         // Do lower priority stuff infinitely here
+        hw.seed.PrintLine("Vibrato LFO Depth: %d ", int(knob_vibdepth.Value() * 1000));
         System::Delay(10);
     }
 }
