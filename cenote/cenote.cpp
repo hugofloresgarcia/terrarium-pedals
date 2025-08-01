@@ -5,27 +5,53 @@
 #include "lib/cenote_delay.h"
 #include "lib/vibrato.h"
 #include "lib/control_recorder.h"
+// #include "lib/settings.h"
 
 using namespace daisy;
 using namespace daisysp;
 using namespace terrarium;
 
+constexpr static float kMomentaryFswTimeMs = 300.0f; // Time to hold footswitch for momentary bypass mode
+static constexpr float kShiftMaxLarge = 150.0f; // 150 hz if sw3 is pressed
+static constexpr float kShiftMaxSmall = 15.0f; // 15 hz if sw3 is not pressed
+
+struct FswState {
+    bool state = false; // the "virtual" state of the footswitch
+    bool momentary = false; // virtual momentary state for temporary bypass mode
+    bool pressed = false; // true if the footswitch is currently pressed
+    bool rising = false; // true if the footswitch was just pressed
+    bool falling = false; // true if the footswitch was just released
+    float time_held = 0.0f; // time the footswitch has been held (ms)
+
+    inline bool operator== (const FswState& other) const {
+        return state == other.state;
+    }
+    inline bool operator!= (const FswState& other) const {
+        return !(state == other.state);
+    }
+    inline bool operator|| (const FswState& other) const {
+        return state || other.state;
+    }
+    inline operator bool() const {
+        return state;
+    }
+
+};
+
 // Declare a global daisy_petal for hardware access
 DaisyPetal  hw;
 
-bool        fsw1, fsw2, sw1, sw2, sw3, sw4;
-bool        fsw1_momentary, fsw2_momentary = false; // for temporary bypass mode
 Led         led1, led2;
-Parameter   knob_delaytime, 
-            knob_delayfb, 
-            knob_level, 
-            knob_vibdepth, 
-            knob_vibrate, 
-            knob_shiftamt;
+Parameter   knob2, // delay time
+            knob3, // feedback
+            knob6,  // level
+            knob4,  // vibrato depth
+            knob1,  // vibrato rate
+            knob5;  // shift amount
 
 CenoteDelayEngine del;
 VibratoEngine vibrato; // Two engines for stereo vibrato
-Oscillator updown_lfo; // Up/Down LFO for freqshit 
+Oscillator updown_lfo; // Up/Down LFO for freqshift
 
 Line bypass_ramp; // Ramp for bypassing the delay
 float ramp_time_ms = 25.0f;
@@ -34,114 +60,148 @@ bool prev_bypass_state = false; // Previous bypass state for ramping
 
 TerrariumControlRecorder control_recorder; // Control recorder for recording knob movements
 
-// parameter values (for overriding with control recorder)
-float knob_delaytime_val, 
-      knob_delayfb_val, 
-      knob_level_val, 
-      knob_vibdepth_val, 
-      knob_vibrate_val, 
-      knob_shiftamt_val;
-/*
- * Process terrarium knobs and switches
- */
-void processTerrariumControls() {
-    // update footswitches
-    bool fsw1_re = hw.switches[Terrarium::FOOTSWITCH_1].RisingEdge();
-    bool fsw2_re = hw.switches[Terrarium::FOOTSWITCH_2].RisingEdge();
+// pot and switch values
+TerrariumState s;
+// State for footswitches
+FswState fsw1, fsw2; // Footswitch states
 
-    bool fsw1_pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();
-    bool fsw2_pressed = hw.switches[Terrarium::FOOTSWITCH_2].Pressed();
+void processFootSwitches(FswState &fsw1, FswState &fsw2) {
 
-    bool fsw1_falling = hw.switches[Terrarium::FOOTSWITCH_1].FallingEdge();
-    bool fsw2_falling = hw.switches[Terrarium::FOOTSWITCH_2].FallingEdge();
+    fsw1.pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();
+    fsw2.pressed = hw.switches[Terrarium::FOOTSWITCH_2].Pressed();
 
-    bool fsw1_rising = hw.switches[Terrarium::FOOTSWITCH_1].RisingEdge();
-    bool fsw2_rising = hw.switches[Terrarium::FOOTSWITCH_2].RisingEdge();
+    fsw1.rising = hw.switches[Terrarium::FOOTSWITCH_1].RisingEdge();
+    fsw2.rising = hw.switches[Terrarium::FOOTSWITCH_2].RisingEdge();
 
-    float fsw1_time_held = hw.switches[Terrarium::FOOTSWITCH_1].TimeHeldMs();
-    float fsw2_time_held = hw.switches[Terrarium::FOOTSWITCH_2].TimeHeldMs();
+    fsw1.falling = hw.switches[Terrarium::FOOTSWITCH_1].FallingEdge();
+    fsw2.falling = hw.switches[Terrarium::FOOTSWITCH_2].FallingEdge();
 
-    // toggle footswitches
-    if(fsw1_re) {
-        fsw1 = !fsw1;
-        if (fsw1) {fsw2 = false;} // if fsw1 is pressed, disengage fsw2
+    fsw1.time_held = hw.switches[Terrarium::FOOTSWITCH_1].TimeHeldMs();
+    fsw2.time_held = hw.switches[Terrarium::FOOTSWITCH_2].TimeHeldMs();
+
+    // update footswitch state
+    if(fsw1.rising) {
+        fsw1.state = !fsw1.state;
+        if (fsw1.state) {fsw2.state = false;} // if fsw1 is pressed, disengage fsw2
     }
     
-    if(fsw2_re) {
-        fsw2 = !fsw2;
-        if (fsw2) {fsw1 = false;} // if fsw2 is pressed, disengage fsw1
+    if(fsw2.rising) {
+        fsw2.state = !fsw2.state;
+        if (fsw2.state) {fsw1.state = false;} // if fsw2 is pressed, disengage fsw1
     }
 
-    if (fsw1_pressed && fsw1_time_held > 150.0f) {
-        fsw1_momentary = true;
-    } else if (fsw1_falling && fsw1_momentary) {
-        fsw1_momentary = false;
-        fsw1 = false; // disengage bypass mode
+    if (fsw1.pressed && fsw1.time_held > kMomentaryFswTimeMs) {
+        fsw1.momentary = true;
+    } else if (fsw1.falling && fsw1.momentary) {
+        fsw1.momentary = false;
+        // the line below is needed if we're nuking the control recorder code. 
+        fsw1.state = false; // disengage bypass mode
+        
+        // only disengage bypass mode if control recorder is idle (DISABLED)
+        // if (control_recorder.GetState() == TerrariumControlRecorder::CtrlRecorderState::IDLE) {
+        //     fsw1.state = false; 
+        // }
     }
 
     // TODO: fsw2 is held pressed for longer than 300ms, it is in temporary bypass mode
     // and should be disengaged after it is released
-    if (fsw2_pressed && fsw2_time_held > 150.0f) {
-        fsw2_momentary = true;
-    } else if (fsw2_falling && fsw2_momentary) {
-        fsw2_momentary = false;
-        fsw2 = false; // disengage bypass mode
+    if (fsw2.pressed && fsw2.time_held > kMomentaryFswTimeMs) {
+        fsw2.momentary = true;
+    } else if (fsw2.falling && fsw2.momentary) {
+        fsw2.momentary = false;
+        fsw2.state = false; // disengage bypass mode
     }
+
+    // CONTROL RECORDER (not ready yet)
+    // if both footswitches are in momentary mode, start recording
+    // if (fsw1.momentary && fsw2.momentary) {
+    //     if (control_recorder.GetState() == 
+    //         TerrariumControlRecorder::CtrlRecorderState::IDLE) {
+    //         control_recorder.StartRecording();
+    //         control_recorder.SetListenForOverrides(false);
+    //     }
+    // }
+    // else if (control_recorder.GetState() == 
+    //         TerrariumControlRecorder::CtrlRecorderState::RECORDING 
+    //         && (fsw1.falling || fsw2.falling)) {
+    //     // if both footswitches are released, stop recording and start playing
+    //     if (control_recorder.GetState() == 
+    //         TerrariumControlRecorder::CtrlRecorderState::RECORDING) {
+    //         control_recorder.StartPlaying();
+    //         control_recorder.SetListenForOverrides(true);
+    //     }
+    // }
+    // if ((fsw1.rising || fsw2.rising) && control_recorder.GetState() == 
+    //         TerrariumControlRecorder::CtrlRecorderState::PLAYING) {
+    //     control_recorder.StopPlaying();
+    //     fsw1.state = false; 
+    //     fsw2.state = false; 
+    // }
+}
+
+
+/*
+ * Process terrarium pots and switches
+ */
+void processTerrariumControls() {
+    // update footswitches
+    processFootSwitches(fsw1, fsw2);
 
     // update knob values
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_analog_control.html
-    knob_delaytime.Process();
-    knob_delayfb.Process();
-    knob_level.Process();
-    knob_vibdepth.Process();
-    knob_vibrate.Process();
-    knob_shiftamt.Process();
+    knob1.Process();
+    knob2.Process();
+    knob3.Process();
+    knob4.Process();
+    knob5.Process();
+    knob6.Process();
 
-    led1.Set(fsw1 ? 1.0f : 0.0f);
-    led2.Set(fsw2 ? 1.0f : 0.0f);
+    // update state
+    s.pot1 = knob1.Value();
+    s.pot2 = knob2.Value();
+    s.pot3 = knob3.Value();
+    s.pot4 = knob4.Value();
+    s.pot5 = knob5.Value();
+    s.pot6 = knob6.Value();
 
-    sw1 = hw.switches[Terrarium::SWITCH_1].Pressed();
-    sw2 = hw.switches[Terrarium::SWITCH_2].Pressed();
-    sw3 = hw.switches[Terrarium::SWITCH_3].Pressed();
-    sw4 = hw.switches[Terrarium::SWITCH_4].Pressed();
+    s.sw1 = hw.switches[Terrarium::SWITCH_1].Pressed();
+    s.sw2 = hw.switches[Terrarium::SWITCH_2].Pressed();
+    s.sw3 = hw.switches[Terrarium::SWITCH_3].Pressed();
+    s.sw4 = hw.switches[Terrarium::SWITCH_4].Pressed();
+    
+    // update LEDS
+    led1.Set(fsw1.state ? 1.0f : 0.0f);
+    led2.Set(fsw2.state ? 1.0f : 0.0f);
 
-    // get the values for the knobs and switches
-    knob_delaytime_val = knob_delaytime.Value();
-    knob_delayfb_val = knob_delayfb.Value();
-    knob_level_val = knob_level.Value();
-    knob_vibdepth_val = knob_vibdepth.Value();
-    knob_vibrate_val = knob_vibrate.Value();
-    knob_shiftamt_val = knob_shiftamt.Value();
+    // // process control recorder 
+    // NOTE: control recorder is not ready yet. 
+    // control_recorder.Process(s);
 
-    // CONFIGURE THE ENGINES
+    // set knob2 to delay time
+    float delay_time_mult = s.sw3 ? 1.0f : 0.075f; // 0.5x if sw3 is pressed, otherwise 1.0x
+    del.SetDelayMs(s.pot2 * del.GetMaxDelayMs() * delay_time_mult); //
 
-    // set knob_delaytime to delay time
-    float delay_time_mult = sw3 ? 1.0f : 0.075f; // 0.5x if sw3 is pressed, otherwise 1.0x
-    del.SetDelayMs(knob_delaytime_val * del.GetMaxDelayMs() * delay_time_mult); //
-
-    // set knob_delayfb to feedback
+    // set knob3 to feedback
     del.SetFeedback(
-        fsw2 ? 1.0f : // fsw2 is full feedback mode.
-            knob_delayfb_val * 0.9999999999f
-
+        fsw2.state ? 1.0f : // fsw2 is full feedback mode.
+            s.pot3 * 0.9999999999f
     );
 
     // set knob_shiftamt to pitch shift amount
-    float up_or_down = sw4 ? 1.0f : -1.0f; // negative if sw4 is pressed
-
-    float shift_mult = sw3 ? 150.0f : 15.0f; // 150 hz if sw3 is pressed, otherwise 15 hz
-    del.SetTransposition(up_or_down * (knob_shiftamt_val * shift_mult));
-    del.SetBypassFrequencyShift(!sw2); // bypass frequency shifting if sw2 is pressed
+    float up_or_down = s.sw4 ? 1.0f : -1.0f; // negative if sw4 is pressed
+    float shift_mult = s.sw3 ? kShiftMaxLarge : kShiftMaxSmall;
+    del.SetTransposition(up_or_down * (s.pot5 * shift_mult));
+    del.SetBypassFrequencyShift(!s.sw2); // bypass frequency shifting if sw2 is pressed
 
     // set knob_vibdepth to vibrato depth
     // if sw1 is pressed, set it to "extreme" depth
     // otherwise, set it to a fraction of the knob value
-    float lfodepth = sw1 ? 1.0f : knob_vibdepth_val * 0.5f; // 1.0 if sw1 is pressed, otherwise 0.25x knob value
+    float lfodepth = s.sw1 ? 1.0f : s.pot4 * 0.5f; // 1.0 if sw1 is pressed, otherwise 0.25x knob value
     vibrato.SetLfoDepth(lfodepth);
-    vibrato.SetLfoFreq(knob_vibrate_val * 15.0f + 0.1f);
+    vibrato.SetLfoFreq(s.pot1 * 15.0f + 0.1f);
 
     // disable vibrato at too low depth to avoid latency
-    knob_vibdepth_val < 0.1f ? vibrato.SetMix(0.0f) : vibrato.SetMix(1.0f);
+    s.pot4 < 0.1f ? vibrato.SetMix(0.0f) : vibrato.SetMix(1.0f);
 
     led1.Update();
     led2.Update();
@@ -191,10 +251,10 @@ void callback(
         // process delay
         del_out = del.Process(delay_in, /*clip=*/true, /*limit=*/fsw2);
 
-        del_out = knob_level.Value() * del_out; // apply level control
+        del_out = knob6.Value() * del_out; // apply level control
         
         // mix delay
-        sig = sig + del_out;
+        sig = sig + del_out * 1.5f; // little oomph
         
         // softclip out
         out[i] = SoftClip(sig); // Soft clipping
@@ -208,24 +268,22 @@ int main(void)
 
     hw.Init();
     sr = hw.AudioSampleRate();
-    hw.SetAudioBlockSize(4);
+    hw.SetAudioBlockSize(2);
     hw.seed.StartLog(false);
-    // hw.SetAudioSampleRate(SaiHandle::Config::SampleRate::SAI_96KHZ);
 
     led1.Init(hw.seed.GetPin(Terrarium::LED_1), false);
     led2.Init(hw.seed.GetPin(Terrarium::LED_2), false);
 
     // Initialize your knobs here like so:
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
-    knob_delaytime.Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob_delayfb.Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob_level.Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob_vibrate.Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_vibdepth.Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_shiftamt.Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
+    knob2.Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob3.Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob6.Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob1.Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
+    knob4.Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
+    knob5.Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
 
     // Set sr for your processing like so:
-    // verb.Init(sr);
     del.Init(sr);
     vibrato.Init(sr);
 
@@ -238,7 +296,6 @@ int main(void)
     bypass_ramp.Init(sr);
 
     control_recorder.Init(); // Initialize control recorder
-    // bypass = false;
 
     hw.StartAdc();
     hw.StartAudio(callback);
@@ -246,7 +303,7 @@ int main(void)
     while(1)
     {
         // Do lower priority stuff infinitely here
-        hw.seed.PrintLine("Vibrato LFO Depth: %d ", int(knob_vibdepth.Value() * 1000));
+        hw.seed.PrintLine("Vibrato LFO Depth: %d ", int(knob4.Value() * 1000));
         System::Delay(10);
     }
 }
