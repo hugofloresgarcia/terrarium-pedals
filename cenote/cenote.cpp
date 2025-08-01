@@ -268,7 +268,12 @@ int main(void)
 
     hw.Init();
     sr = hw.AudioSampleRate();
-    hw.SetAudioBlockSize(2);
+
+    // CRITICAL: block size must be 2 to avoid 16kHz noise introduced by the  terrarium circuit or the seed itself!
+    // according to the interwebs, the noise drops an octave every time the block size is doubled.
+    // 2 is out of the nyquist range, so its filtered out. 
+    // see https://github.com/bkshepherd/DaisySeedProjects/issues/9
+    hw.SetAudioBlockSize(2); 
     hw.seed.StartLog(false);
 
     led1.Init(hw.seed.GetPin(Terrarium::LED_1), false);

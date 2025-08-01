@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "daisy_seed.h"
 #include "daisysp.h"
+#include "state.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -75,8 +76,26 @@ public:
         return index_;
     }
 
-    void Process(float* pots, bool* switches)
+    // void Process(float* pots, bool* switches)
+    void Process(
+        TerrariumState& s
+    )
     {
+        float pots[n_pots_];
+        bool switches[n_switches_];
+
+        pots[0] = s.pot1;
+        pots[1] = s.pot2;
+        pots[2] = s.pot3;
+        pots[3] = s.pot4;
+        pots[4] = s.pot5;
+        pots[5] = s.pot6;
+
+        switches[0] = s.sw1;
+        switches[1] = s.sw2;
+        switches[2] = s.sw3;
+        switches[3] = s.sw4;
+
         if (state_ == CtrlRecorderState::RECORDING) {
             // Record
             for (uint8_t i = 0; i < n_pots_; i++) {
@@ -133,6 +152,17 @@ public:
                 index_ = 0;
             }
         }
+
+        s.pot1 = pots[0];
+        s.pot2 = pots[1];
+        s.pot3 = pots[2];
+        s.pot4 = pots[3];
+        s.pot5 = pots[4];
+        s.pot6 = pots[5];
+        s.sw1 = switches[0];
+        s.sw2 = switches[1];
+        s.sw3 = switches[2];
+        s.sw4 = switches[3];
     }
 
 private:
