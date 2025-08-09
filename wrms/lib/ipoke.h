@@ -40,21 +40,14 @@ public:
         assert(buf_ != nullptr);
     }
 
-    void IPoke(float in, float pos) 
+    void IPoke(float in, float index) 
     {
-        // TODO: this function breaks when start_point_ and end_point_ are not 0 and 1
-        // since the interpolation does not that that into account. 
-        // see comments marked E1 as suspicious
-        float pos_ = fclamp(pos, 0.f, 1.f);
-        pos_ = linlin(pos_, 0.f, 1.f, start_point_, end_point_);
 
         // Region calculations
-        float region_start = start_point_ * buf_size_;
-        float region_end   = end_point_ * buf_size_;
-        float region_size  = region_end - region_start;
+        float region_size  = end_pos_ - start_pos_;
         
         float val = in;
-        float index1_ = pos_ * buf_size_;
+        float index1_ = index;
         float index0_next = index1_; // next idx0
 
         delay_line_.Write(val);
@@ -66,11 +59,8 @@ public:
         }
 
         // get interpolation scalar
-        float diff = index1_ - index0_;
-        if (diff < 0.000001f) {
-            diff = 0.000001f; // avoid division by zero
-        }
-        float iscale = 1.0f / (diff);
+        float diff = fmax(index1_ - index0_, 1e-6f);
+        float iscale = 1.0f / diff;
 
         // write samples
         size_t i_idx0 = (size_t)floor(index0_);
@@ -82,54 +72,25 @@ public:
             float v = delay_line_.Read(1-a);
             
             size_t target_index = (
-                region_start + ((i - (size_t)region_start) % (size_t)region_size)
+                start_pos_ + ((i - (size_t)start_pos_) % (size_t)region_size)
             );
-            // buf_[i % buf_size_] = v; // wrap around // E1?
             buf_[target_index] = v; // wrap around // E1?
         }
 
         // how many samples we recorded per input sample?
         // float samples_per_input = diff;
         index0_ = index0_next; // update index0 for next call
-
     }
 
     // read from the buffer with interpolation
-    float Peek(float pos){
-        // adapt pos to start and end points
-        pos = fclamp(pos, 0.f, 1.f);
-        pos = linlin(pos, 0.f, 1.f, start_point_, end_point_);
-
-        // // compute region start and size
-        // size_t region_start = (size_t)(start_point_ * buf_size_);
-        // size_t region_size  = (size_t)((end_point_ - start_point_) * buf_size_);
-
-        // // compute index relative to region
-        // float index = pos * buf_size_;
-        // if(index < (float)region_start)
-        //     index = (float)region_start;
-        // if(index >= (float)(region_start + region_size))
-        //     index = (float)(region_start + region_size - 1);
-
-        // // Linear interpolation within region
-        // size_t i_idx0 = (size_t)floor(index);
-        // float i_frac  = index - (float)i_idx0;
-
-        // const float a = buf_[(i_idx0) % buf_size_];
-        // const float b = buf_[(i_idx0 + 1) % buf_size_];
-        // return a + (b - a) * i_frac;
-
-        float index = pos * buf_size_;
+    float Peek(float index){
         assert(buf_ != nullptr);
         
         size_t i_idx0 = (size_t)floor(index);
         float i_frac = index - (float)i_idx0;
 
-        // const float a = buf_[i_idx0 % buf_size_];
-        // const float b = buf_[(i_idx0 + 1) % buf_size_];
-
-        size_t region_start = (size_t)(start_point_ * buf_size_);
-        size_t region_size  = (size_t)((end_point_ - start_point_) * buf_size_);
+        size_t region_start = (size_t)(start_pos_);
+        size_t region_size  = GetRegionSize();
 
         size_t target_index_a = (
             region_start + ((i_idx0 - (size_t)region_start) % (size_t)region_size)
@@ -151,7 +112,15 @@ public:
     }
 
     size_t GetRegionSize() const {
-        return (size_t)((end_point_ - start_point_) * buf_size_);
+        return (size_t)((end_pos_ - start_pos_));
+    }
+
+    float GetStartPoint() const {
+        return start_pos_;
+    }
+
+    float GetEndPoint() const {
+        return end_pos_;
     }
 
     void Fill(float value)
@@ -162,12 +131,14 @@ public:
         }
     }
 
-    void SetStartPoint(float pos) {
-        start_point_ = fclamp(pos, 0.f, 1.f);
+    // set the start and end points of the buffer region
+    void SetRegion(float start_index, float end_index) {
+        end_pos_ = fclamp(end_index, 1.f, buf_size_);
+        start_pos_ = fclamp(start_index, 0.f, end_pos_-1.f);
     }
 
-    void SetEndPoint(float pos) {
-        end_point_ = fclamp(pos, 0.f, 1.f);
+    void ResetIndex() {
+        index0_ = start_pos_;
     }
 
 private:
@@ -180,8 +151,8 @@ private:
     // params
     float index0_ = 0.f; // 
 
-    float start_point_ = 0.f; 
-    float end_point_ = 1.f;
+    float start_pos_ = 0.f; 
+    float end_pos_ = 1.f;
 
     DelayLine<float, 4> delay_line_; // delay line for interpolation
 };

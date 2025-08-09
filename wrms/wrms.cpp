@@ -14,6 +14,7 @@ bool        fsw1, fsw2, sw1, sw2, sw3, sw4;
 bool        fsw1_momentary, fsw2_momentary = false; // for temporary bypass mode
 Led         led1, led2;
 
+
 Parameter   knob1_wrm1_vol, 
             knob2_wrms_slew, 
             knob3_wrm2_vol, 
@@ -23,7 +24,7 @@ Parameter   knob1_wrm1_vol,
 
 float sr;
 
-constexpr static size_t wrm_buf_size = 48000 * 10; // 10 seconds of audio at 48kHz
+constexpr static size_t wrm_buf_size = 48000 * 60; // 10 seconds of audio at 48kHz
 float DSY_SDRAM_BSS wrm1_buf[wrm_buf_size]; // 10 seconds of audio at 48kHz
 float DSY_SDRAM_BSS wrm2_buf[wrm_buf_size];
 
@@ -36,10 +37,68 @@ WrmsLooper wrm1, wrm2;
 float fsw_held_ms = 300.f;
 float max_slew_ms = 3000.f;
 
+// LED wrapper class for blinking and other effects.
+class LedWrap {
+public: 
+    LedWrap() {}
+    ~LedWrap() {}
+
+    enum class LedState {
+        OFF,
+        ON,
+        BLINKING,
+    };
+
+    void Init(Led led, float sample_rate) {
+        led_ = led;
+        blink_lfo_.Init(sample_rate);
+        blink_lfo_.SetWaveform(Oscillator::WAVE_SQUARE); // square wave for blinking
+        blink_lfo_.SetFreq(4.0f); // default blink rate of
+    }
+
+    void SetBlinkRate(float rate) {
+        blink_lfo_.SetFreq(rate);
+        is_blinking_ = true;
+    }
+
+    void SetState(LedState state) {
+        switch (state) {
+            case LedState::OFF:
+                led_.Set(0.0f);
+                is_blinking_ = false;
+                break;
+            case LedState::ON:
+                led_.Set(1.0f);
+                is_blinking_ = false;
+                break;
+            case LedState::BLINKING:
+                is_blinking_ = true;
+                break;
+        }
+    }
+    void Process() {
+        if (is_blinking_) {
+            float blink_value = blink_lfo_.Process() == -1.0f ? 0.0f : 1.0f; // convert -1 to 0 for off, 1 to 1 for on
+            led_.Set(blink_value);
+            led_.Update(); // update the LED state
+        }
+        else {
+            led_.Update(); // update the LED state
+        }
+    }
+private:
+    Led led_;
+    bool is_blinking_ = false; // Whether the LED is blinking
+
+    Oscillator blink_lfo_; // LFO for blinking effect 
+};
+
+// a string to print if new messages were produced in the audio loop
+LedWrap     led1_wrap, led2_wrap;
 
 void configure_worm(WrmsLooper &wrm, float level, float overdub, 
     float rate_slew_ms, bool oct_up, bool oct_down, 
-    bool footswitch_rising, bool footswitch_held)
+    bool footswitch_rising, bool footswitch_held, LedWrap &led_wrap)
 {
     // WRMS CONFIG
     wrm.SetLevel(level);
@@ -69,14 +128,27 @@ void configure_worm(WrmsLooper &wrm, float level, float overdub,
             wrm.SetState(WrmsLooper::State::PLAYBACK); 
         }
         else if (wrm.GetState() == WrmsLooper::State::PLAYBACK)
-        { wrm.SetState(WrmsLooper::State::OVERDUB); }
+        { 
+            wrm.SetState(WrmsLooper::State::OVERDUB); 
+        }
         else if (wrm.GetState() == WrmsLooper::State::OVERDUB)
-        { wrm.SetState(WrmsLooper::State::PLAYBACK); }
+        { 
+            wrm.SetState(WrmsLooper::State::PLAYBACK); 
+        }
     }
 
     if (footswitch_held)
     {
         wrm.Reset();
+    }
+
+    if (wrm.GetState() == WrmsLooper::State::RECORD || 
+        wrm.GetState() == WrmsLooper::State::OVERDUB) {
+        led_wrap.SetState(LedWrap::LedState::BLINKING);
+    } else if (wrm.GetState() == WrmsLooper::State::PLAYBACK) {
+        led_wrap.SetState(LedWrap::LedState::ON);
+    } else {
+        led_wrap.SetState(LedWrap::LedState::OFF);
     }
 
 }
@@ -124,7 +196,8 @@ void processTerrariumControls() {
         /*oct_up=*/sw1_re,
         /*oct_down=*/sw2_re,
         /*footswitch_rising=*/fsw1_rising,
-        /*footswitch_held=*/fsw1_held
+        /*footswitch_held=*/fsw1_held, 
+        /*led_wrap=*/led1_wrap
     );
 
     configure_worm(
@@ -135,11 +208,9 @@ void processTerrariumControls() {
         /*oct_up=*/sw3_re,
         /*oct_down=*/sw4_re,
         /*footswitch_rising=*/fsw2_rising,
-        /*footswitch_held=*/fsw2_held
+        /*footswitch_held=*/fsw2_held, 
+        /*led_wrap=*/led2_wrap
     );
-
-    led1.Set(wrm1.GetState() == WrmsLooper::State::IDLE ? 0.0f : 1.0f);
-    led2.Set(wrm2.GetState() == WrmsLooper::State::IDLE ? 0.0f : 1.0f);
 
 
 }
@@ -155,8 +226,8 @@ void callback(
 {
     hw.ProcessAllControls();
     processTerrariumControls();
-    led1.Update();
-    led2.Update();
+    led1_wrap.Process();
+    led2_wrap.Process();
 
     float wrm1_out = 0.f;
     float wrm2_out = 0.f;
@@ -180,6 +251,8 @@ int main(void)
 
     led1.Init(hw.seed.GetPin(Terrarium::LED_1), false);
     led2.Init(hw.seed.GetPin(Terrarium::LED_2), false);
+    led1_wrap.Init(led1, sr);
+    led2_wrap.Init(led2, sr);
 
     // Initialize your knobs here like so:
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
@@ -196,6 +269,9 @@ int main(void)
     hw.StartAdc();
     hw.StartAudio(callback);
 
+    int prev_position = 0;
+    int prev_position2 = 0;
+
 
     while(1)
     {
@@ -210,13 +286,19 @@ int main(void)
 
         // print pos and rate (cast to int first)
         hw.seed.PrintLine("WRM1 Pos: %d, Rate: %d",
-            (int)(wrm1.GetPosition() * wrm_buf_size), 
+            (int)(wrm1.GetPosition() * wrm1.GetBufferRegionSize()), 
             (int)wrm1.GetRateSemitones()
         );
+        if (wrm1.GetPosition() < prev_position) {
+            hw.seed.PrintLine("WRM1 Position reset at %d", (int)(wrm1.GetPosition() * wrm_buf_size));
+        }
 
         hw.seed.PrintLine("WRM2 Pos: %d, Rate: %d",
-            (int)(wrm2.GetPosition() * wrm_buf_size), 
+            (int)(wrm2.GetPosition() * wrm1.GetBufferRegionSize()), 
             (int)wrm2.GetRateSemitones()
         );
+        if (wrm2.GetPosition() < prev_position2) {
+            hw.seed.PrintLine("WRM2 Position reset at %d", (int)(wrm2.GetPosition() * wrm_buf_size));
+        }
     }
 }

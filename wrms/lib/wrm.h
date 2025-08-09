@@ -67,12 +67,14 @@ public:
     // pos: [0, 1] where 0 is the start of the buffer and 1 is the end
     void SetLoopPoints(float start_phase, float end_phase) {
         float cur_index = pos_ * buffer_.GetRegionSize();
-        
-        buffer_.SetStartPoint(start_phase); // set the start point in the buffer
-        buffer_.SetEndPoint(end_phase); // set the end point in the buffer
 
         float start_index = start_phase * buffer_.GetBufferSize();
         float end_index = end_phase * buffer_.GetBufferSize();
+
+        buffer_.SetRegion(
+            start_index, 
+            end_index
+        );
         
         // adjust the phasor to the new end point
         float new_index = fclamp(
@@ -84,6 +86,10 @@ public:
         // adjust the position phasor to the new index according to the new range
         float new_pos = new_index / (end_index - start_index);
         pos_phasor_.SetPhase(new_pos); // set the phase of the position ph
+    }
+
+    size_t GetBufferRegionSize() const {
+        return buffer_.GetRegionSize();
     }
 
     float GetPhasorFreq() {
@@ -102,7 +108,8 @@ public:
         pos_ = pos_phasor_.Process(&pos_phasor_finished);
 
         // read from buffer
-        float read_val = buffer_.Peek(pos_);
+        float buf_index = linlin(pos_, 0.f, 1.f, buffer_.GetStartPoint(), buffer_.GetEndPoint());
+        float read_val = buffer_.Peek(buf_index);
 
         if (state_ == State::RECORD && pos_phasor_finished) {
             SetState(State::PLAYBACK); // switch to playback when the phasor completes a cycle
@@ -110,10 +117,10 @@ public:
 
         // write to buf
         if (state_ == State::RECORD) {
-            buffer_.IPoke(in, pos_);
+            buffer_.IPoke(in, buf_index);
         } else if (state_ == State::OVERDUB) {
             float write_val = in + read_val * overdub_;
-            buffer_.IPoke(write_val, pos_);
+            buffer_.IPoke(write_val, buf_index);
         }
 
         // output the read value, advance the playhead
@@ -158,6 +165,8 @@ public:
         SetRateSlewMs(100.f); // default slew time
 
         SetLoopPoints(0.0f, 1.0f); // reset loop points
+
+        buffer_.ResetIndex(); // reset the index in the buffer
     }
     
 private:
