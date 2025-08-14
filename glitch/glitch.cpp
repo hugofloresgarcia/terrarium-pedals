@@ -4,6 +4,7 @@
 
 #include "lib/glitch.h"
 #include "lib/ledwrap.h"
+#include "lib/shiftknobman.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -32,7 +33,6 @@ struct FswState {
     inline operator bool() const {
         return state;
     }
-
 };
 constexpr static float kMomentaryFswTimeMs = 300.0f; // Time to hold footswitch for momentary bypass mode
 
@@ -40,24 +40,35 @@ constexpr static float kMomentaryFswTimeMs = 300.0f; // Time to hold footswitch 
 FswState   fsw1, fsw2; // footswitch states
 
 bool        sw1, sw2, sw3, sw4;
+
 Led         led1, led2;
+LedWrap     ledw1, ledw2;
 
 Parameter   knob_glitch_dur, 
             knob_glitch_spread, 
             knob_pitch, 
             knob_rskip, 
             knob_level, 
-            knob_filter;
+            knob_env;
+
+enum KNOB {
+    KNOB_GLITCH_DUR = 0,
+    KNOB_GLITCH_SPREAD,
+    KNOB_PITCH,
+    KNOB_RSKIP,
+    KNOB_LEVEL,
+    KNOB_ENV,
+    KNOB_LAST
+};
 
 float sr;
 
 
-#define BUF_SIZE (48000 * 2)  // 60 seconds of audio at 48kHz
+#define BUF_SIZE (48000 * 20)  // 60 seconds of audio at 48kHz
 #define CHANS 1 // mono :(
 #define BLOCK_SIZE 2 // 2 samples per block for audio processing
 
-float buf[BUF_SIZE * CHANS];
-float sig[CHANS]; // temp buffer 
+float DSY_SDRAM_BSS buf[BUF_SIZE * CHANS];
 
 GlitchEngine glitch;
 
@@ -69,7 +80,7 @@ if (x >= b)
 return (x - a) / (b - a) * (d - c) + c;
 }
 
-
+ShiftKnobManager skm;
 
 void processFootSwitches(FswState &fsw1, FswState &fsw2) {
     fsw1.pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();
@@ -133,22 +144,69 @@ void processTerrariumControls() {
     knob_pitch.Process();
     knob_rskip.Process();
     knob_level.Process();
-    knob_filter.Process();
+    knob_env.Process();
 
-
-    led1.Set(fsw1.state ? 1.0f : 0.0f);
-    led2.Set(fsw2.state ? 1.0f : 0.0f);
 }
 
 void controlBlock() {
+    // process the shift knob manager
+    std::array<float, 8> hw_knobs;
+    hw_knobs[0] = knob_glitch_dur.Value();
+    hw_knobs[1] = knob_glitch_spread.Value();
+    hw_knobs[2] = knob_pitch.Value();
+    hw_knobs[3] = knob_rskip.Value();
+    hw_knobs[4] = knob_level.Value();
+    hw_knobs[5] = knob_env.Value();
+    hw_knobs[6] = 0.0f; // unused
+    hw_knobs[7] = 0.0f; // unused
+    
+    skm.SetShift(sw1);
+    bool takeover = skm.ProcessKnobs(hw_knobs);
+    
+
+    float glitch_dur = linlin(
+        skm.GetNormalValue(KNOB_GLITCH_DUR), 
+        0.0f, 1.0f, 20.0f, 2000.0f
+    );
+    // add a random amount to the glitch duration of up to 50% of the duration
+    float rand_dur_amt = skm.GetShiftValue(KNOB_GLITCH_DUR);
+    float rand_dur = rand_dur_amt * randf(-0.5f * glitch_dur, 0.5f * glitch_dur);
+    glitch_dur += rand_dur;
+    glitch_dur = fclamp(glitch_dur, 20.f, 5000.f); // clamp between 20ms and 5000ms
+
+    float glitch_spread = skm.GetNormalValue(KNOB_GLITCH_SPREAD);
+
+    float pitch = linlin(
+        skm.GetNormalValue(KNOB_PITCH), 
+        0.0f, 1.0f, -12.0f, 12.0f
+    );
+    // round pitch to the nearest semitone
+    pitch = roundf(pitch);
+    float pitch_spread = skm.GetShiftValue(KNOB_PITCH) * 24.0f; // up to +/- 12 semitones of pitch spread
+    pitch_spread = fclamp(pitch_spread, 0.f, 12.f); // clamp between 0 and 12 semitones
+
+
+    float rskip = skm.GetNormalValue(KNOB_RSKIP);
+
+    float level = skm.GetNormalValue(KNOB_LEVEL);
+
+    float env_atk_amt = skm.GetNormalValue(KNOB_ENV);
+
+
+    glitch.SetPitchSpreadType(
+        sw2 ? 
+        GlitchEngine::PitchSpreadType::PITCH_SPREAD_RAND : 
+        GlitchEngine::PitchSpreadType::PITCH_SPREAD_OCTAVES
+    );
+
     // update the glitch engine with the current parameters
-    float glitch_dur = linlin(knob_glitch_dur.Value(), 0.0f, 1.0f, 20.0f, 5000.0f);
-    float glitch_spread = knob_glitch_spread.Value();
-    float pitch = linlin(knob_pitch.Value(), 0.0f, 1.0f, -12.0f, 12.0f);
-    float pitch_spread = 0.0f;
-    float rskip = knob_rskip.Value();
-    float level = knob_level.Value();
-    float env_atk_amt = 0.1f;
+    // float glitch_dur = linlin(knob_glitch_dur.Value(), 0.0f, 1.0f, 20.0f, 5000.0f);
+    // float glitch_spread = knob_glitch_spread.Value();
+    // float pitch = linlin(knob_pitch.Value(), 0.0f, 1.0f, -12.0f, 12.0f);
+    // float pitch_spread = 0.0f;
+    // float rskip = knob_rskip.Value();
+    // float level = knob_level.Value();
+    // float env_atk_amt = knob_env.Value();
     glitch.SetGlitchParams(
         /*glitch_dur=*/ glitch_dur,
         /*rskip=*/ rskip,
@@ -160,6 +218,7 @@ void controlBlock() {
     );
 
     if (fsw1.rising) {
+        glitch.clock().Reset();
         glitch.TriggerGlitch();
     }
 
@@ -167,11 +226,27 @@ void controlBlock() {
         glitch.StopGlitch();
     }
 
+
+    if (takeover) { // notify user that the knob was taken over.
+        ledw1.SetState(LedWrap::LedState::BLINK_SHORT, 500); // blink for 100ms on takeover
+    } else if (fsw1.state && (ledw1.GetState() != LedWrap::LedState::BLINK_SHORT)) {
+        ledw1.SetState(LedWrap::LedState::ON);
+    } else if (!fsw1.state && (ledw1.GetState() != LedWrap::LedState::BLINK_SHORT)) {
+        ledw1.SetState(LedWrap::LedState::OFF);
+    }
+    ledw1.Process();
+
+    ledw2.SetState(LedWrap::LedState::BLINKING);
+    ledw2.SetBlinkRate(glitch.clock().GetFreq()); 
+    ledw2.Process();
+
 }
 
 /*
  * This runs at a fixed rate, to prepare audio samples
  */
+float s_in[CHANS]; // temp buffer 
+float s_out[CHANS]; // temp buffer for output
 void callback(
     AudioHandle::InterleavingInputBuffer  in,
     AudioHandle::InterleavingOutputBuffer out,
@@ -182,22 +257,16 @@ void callback(
     processTerrariumControls();
     controlBlock();
 
-    led1.Update();
-    led2.Update();
-
     for(size_t i = 0; i < size; i += 2)
     {    
-        // Create a BufView for the input and output
-        sig[0] = in[i];
-    
-        BufView in_buf(sig, 1, CHANS);
-        BufView out_buf(&out[i], 1, CHANS);
-        // out_buf.clear(); // clear the output buffer
-        
+        // MONO!
+        s_in[0] = in[i];
+        // s_out[0] = 0.f; // initialize output to zero
+            
         // Process the glitch engine
-        glitch.ProcessOneFrame(in_buf, out_buf);
+        glitch.ProcessOneFrame(s_in, s_out);
 
-        out_buf.get()[0] += in[i];
+        out[i] = in[i] + s_out[0] * 4.0f;
         // out[i] = sample; // copy the input sample to the output buffer
     }
 }
@@ -220,7 +289,10 @@ int main(void)
 
     led1.Init(hw.seed.GetPin(Terrarium::LED_1), false);
     led2.Init(hw.seed.GetPin(Terrarium::LED_2), false);
+    ledw1.Init(led1, (int)sr / BLOCK_SIZE);
+    ledw2.Init(led2, (int)sr / BLOCK_SIZE);
 
+    
     // Initialize your knobs here like so:
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
     knob_glitch_dur     .Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::EXPONENTIAL);
@@ -228,7 +300,10 @@ int main(void)
     knob_pitch          .Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
     knob_rskip          .Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
     knob_level          .Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_filter         .Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
+    knob_env            .Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
+    
+    // init knob manager.
+    skm.Init(6); // 6 knobs
 
     // Set samplerate for your processing like so:
     glitch.Init(sr, buf, BUF_SIZE, CHANS);
@@ -243,9 +318,19 @@ int main(void)
     while(1)
     {
         // Do lower priority stuff infinitely here
-        System::Delay(100);
+        System::Delay(400);
         // print sig
-        PrintSignal(sig, CHANS);
+        // PrintSignal(s_in, CHANS);
+        // // hw.seed.PrintLine("");
+        // hw.seed.Print("-");
+        // PrintSignal(s_out, CHANS);
+
+        // print the LEDW states
+        ledw1.PrintDebugState(hw);
+        hw.seed.PrintLine("");
+        ledw2.PrintDebugState(hw);
+        hw.seed.PrintLine("");
+
         if (i % 4 == 0) {
             hw.seed.PrintLine("");
             glitch.PrintDebugState(hw);

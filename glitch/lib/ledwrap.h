@@ -1,17 +1,17 @@
 #pragma once
-#ifndef HUGO_LIB_GRAINS_H
-#define HUGO_LIB_GRAINS_H
+#ifndef HUGO_LIB_LED_H
+#define HUGO_LIB_LED_H
 
 #ifdef __cplusplus
 
 #include "daisy_petal.h"
 #include "daisysp.h"
 
+using namespace daisysp;
+
 namespace daisy
 {
 
-class 
-{
 
 class LedWrap {
 public: 
@@ -34,7 +34,6 @@ public:
 
     void SetBlinkRate(float rate) {
         blink_lfo_.SetFreq(rate);
-        is_blinking_ = true;
     }
 
     LedState GetState() const {
@@ -57,7 +56,7 @@ public:
                 break;
             case LedState::BLINK_SHORT:
                 is_blinking_ = true;
-                blink_lfo_.SetFreq(16.0f); // faster blink for short blink effect
+                blink_lfo_.SetFreq(8.0f); // faster blink for short blink effect
                 if (state_ != LedState::BLINK_SHORT) {
                     blink_start_ms_ = System::GetNow();
                     blink_duration_ms_ = blink_duration_ms > 0 ? blink_duration_ms : 100; // default 100ms
@@ -84,13 +83,27 @@ public:
                 if ((now - blink_start_ms_) >= blink_duration_ms_) {
                     SetState(prev_state_); // reset state after duration
                 }
-                if (blink_value < 0.5f) {led_.Set(0.5f);} // keep LED dimmed during blink
+                // if (blink_value < 0.5f) {led_.Set(0.0f);} // keep LED dimmed during blink
             }
             led_.Update(); // update the LED state
         }
         else {
             led_.Update(); // update the LED state when not blinking
         }
+    }
+
+    void PrintDebugState(daisy::DaisyPetal &hw) {
+        hw.seed.Print(" LED State: %-10s | Prev State: %-10s | Blinking: %d | Blink Freq: %.2f Hz", 
+                          (state_ == LedState::OFF) ? "OFF" : 
+                          (state_ == LedState::ON) ? "ON" : 
+                          (state_ == LedState::BLINKING) ? "BLINKING" : 
+                          (state_ == LedState::BLINK_SHORT) ? "BLINK_SHORT" : "UNKNOWN",
+                          (prev_state_ == LedState::OFF) ? "OFF" : 
+                          (prev_state_ == LedState::ON) ? "ON" : 
+                          (prev_state_ == LedState::BLINKING) ? "BLINKING" : 
+                          (prev_state_ == LedState::BLINK_SHORT) ? "BLINK_SHORT" : "UNKNOWN",
+                          is_blinking_ ? 1 : 0,
+                          0.0f);
     }
 
 public: // FOR DEBUGGING ONLY
@@ -109,9 +122,7 @@ private:
 
 
 
-};
-
 } // namespace daisysp
 
 #endif // __cplusplus
-#endif // HUGO_LIB_GRAINS_H
+#endif // HUGO_LIB_LED_H

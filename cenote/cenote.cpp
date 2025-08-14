@@ -65,6 +65,7 @@ TerrariumState s;
 // State for footswitches
 FswState fsw1, fsw2; // Footswitch states
 
+
 void processFootSwitches(FswState &fsw1, FswState &fsw2) {
 
     fsw1.pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();

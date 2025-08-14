@@ -38,8 +38,8 @@
 // duration also has a metro that can trigger (or not) the glitch, as dictated by rskip prob. 
 // spread scans through the 10s buffer to pick each grain
 // --------------------------
-// (glitch duration) | (spread) | (pitch/[SHIFT]pitch spread)
-// (rskip)           | (level/[SHIFT]pattern length) | (filter/[SHIFT]crush amt) 
+// (glitch duration/[SHIFT]rand dur amt) | (spread) | (pitch/[SHIFT]pitch spread)
+// (rskip/[SHIFT]filter)           | (level/[SHIFT]pattern length) | (env/[SHIFT]overlap ) 
 //
 // (SHIFT) | (crush) | (random:pattern) | (atk-hard:atk-soft)
 //
@@ -53,7 +53,7 @@
 // LAYERCAKE: granular layers
 // --------------------------
 // *(duration/[SHIFT]rand dur amount)* | *(env/[SHIFT]direction)* | *(pitch/[SHIFT]rand pitch amt)* 
-// *(metro/[SHIFT]trig sens)*                           | *(rskip/[SHIFT]spread)*  | *(level/[SHIFT]pattern length)*
+// *(metro/[SHIFT]trig sens)*  | *(rskip/[SHIFT]spread)*  | *(level/[SHIFT]pattern length)*
 //
 // (SHIFT) | (METRO on/off) | (pitch:steps-octaves) | (random:pattern)
 //
@@ -67,53 +67,6 @@ namespace daisysp
 inline float randf(float min, float max) {
     return min + (max - min) * (static_cast<float>(rand()) / RAND_MAX);
 }
-
-class BufView 
-{
-public:
-    BufView() {}
-    ~BufView() {}
-
-    BufView(float* buffer, size_t buf_frames, size_t buf_chans)
-        : buf_(buffer), frames_(buf_frames), chans_(buf_chans) {
-        assert(buf_ != nullptr);
-    }
-
-    void init(float* buffer, size_t buf_frames, size_t buf_chans) {
-        buf_ = buffer;
-        frames_ = buf_frames;
-        chans_ = buf_chans;
-
-        assert(buf_ != nullptr);
-    }
-
-    float at(size_t frame_idx, size_t chan_idx) const {
-        assert(frame_idx < frames_);
-        assert(chan_idx < chans_);
-        return buf_[frame_idx * chans_ + chan_idx];
-    }
-
-    float *get() {
-        return buf_;
-    }
-
-    size_t frames() const {
-        return frames_;
-    }
-
-    size_t chans() const {
-        return chans_;
-    }
-
-    void clear() {
-        std::fill(buf_, buf_ + (frames_ * chans_), 0.f);
-    }
-
-public:
-    float *buf_;
-    size_t frames_;
-    size_t chans_;  
-};
 
 class Grain 
 {
@@ -132,8 +85,13 @@ public:
          size_t buf_frames, 
          size_t buf_chans) {
         sr_ = sample_rate;
-        buf_.init(buffer, buf_frames, buf_chans);
-        peeker_.Init(buf_.get(), buf_.frames(), buf_.chans());
+
+        assert(buffer != nullptr); // make sure the buffer is not null
+        buf_ = buffer; // pointer to the buffer
+        frames_ = buf_frames;
+        chans_ = buf_chans;
+
+        peeker_.Init(buffer, buf_frames, buf_chans);
         env_.Init(sr_);
 
         pos_ = 0.f;
@@ -161,8 +119,9 @@ public:
         env_atk_ = env_atk;
         start_pos_ = pos_samples;
         end_pos_virtual_ = pos_samples + (dur_ms * sr_ * 0.001f); // end position in samples
+        end_pos_wrapped_ = WrapPos(end_pos_virtual_); // end position wrapped around the buffer
 
-        float atk_time = fclamp(env_atk_ * dur_ms_, 2.f, dur_ms_); // min 10ms atk
+        float atk_time = fclamp(env_atk_ * dur_ms_, 2.f, dur_ms_-2.f); // min 10ms atk
         float decay_time = fclamp(dur_ms_ - atk_time, 2.f, dur_ms_); // min 5ms decay
 
         env_.SetTime(ADENV_SEG_ATTACK, atk_time * 0.001f);
@@ -175,35 +134,38 @@ public:
     }
 
     float WrapPos(float pos) {
-        while (pos < 0.f) pos += buf_.frames();
-        while (pos >= buf_.frames()) pos -= buf_.frames();
+        while (pos < 0.f) pos += frames_;
+        while (pos >= frames_) pos -= frames_;
         return pos;
     }
 
-    void ProcessOneFrame(BufView &out) {
+    void ProcessOneFrame(float *out) {
         // Process the input buffer and produce output
         if (state_ == State::IDLE) {
             // do nothing
-            for (size_t chan = 0; chan < buf_.chans(); ++chan) {
-                out.get()[chan] = 0.f;
+            for (size_t chan = 0; chan < chans_; ++chan) {
+                out[chan] = 0.f;
             }
         } else if (state_ == State::PLAYING) {
             // get envelope value
             float env_val = env_.Process();
             
             // read from the buf
-            peeker_.Peek(pos_, out.get());
+            peeker_.Peek(pos_, out);
 
             // apply the envelope to the output
-            for (size_t chan = 0; chan < buf_.chans(); ++chan) {
-                out.get()[chan] *= env_val; // apply envelope
+            for (size_t chan = 0; chan < chans_; ++chan) {
+                out[chan] *= env_val; // apply envelope
             }
         
             // calculate the increment based on the rate
             float inc = powf(2.f, rate_st_ / 12.0f);
             pos_ += inc;
             pos_ = WrapPos(pos_); // wrap around if needed
-            
+            if (pos_ >= end_pos_wrapped_) {
+                pos_ = start_pos_; // reset to start position if we reach the end
+                // TODO: the above maybe should be a flag since it leads to musically different effects. 
+            }
                         
             // if the env is done, stop the grain
             if (!env_.IsRunning()) {
@@ -228,7 +190,9 @@ public:
     AdEnv env_;
 
     float sr_;
-    BufView buf_;
+    float *buf_ = nullptr; // pointer to the buffer
+    size_t frames_ = 0; // number of frames in the buffer
+    size_t chans_ = 0; // number of channels in the buffer
 
     Ipeek peeker_;
     
@@ -240,6 +204,7 @@ public:
 
     float start_pos_ = 0.f; // start position in samples
     float end_pos_virtual_ = 0.f; // end position in samples (not wrapped)
+    float end_pos_wrapped_ = 0.f; // end position wrapped around the buffer
 
     float rate_st_;
     float dur_ms_;
@@ -257,13 +222,17 @@ public:
               size_t buf_frames, 
               size_t buf_chans) {
         sr_ = sample_rate;
-        buf_.init(buffer, buf_frames, buf_chans);
+        assert(buffer != nullptr); // make sure the buffer is not null
+        buf_ = buffer;
+        frames_ = buf_frames;
+        chans_ = buf_chans;
+
         for (auto &g : grains_) {
-            g.Init(sr_, buf_.get(), buf_.frames(), buf_.chans());
+            g.Init(sr_, buf_, frames_, chans_);
         }
 
-        sig_data.assign(1 * buf_.chans(), 0.f); // a single frame buffer.
-        sig.init(sig_data.data(), 1, buf_.chans());
+        sig_data.assign(1 * chans_, 0.f); // a single frame buffer.
+        sig_ = sig_data.data(); // pointer to the single frame buffer
     }
 
     void TriggerGrain(float pos_samples, 
@@ -303,26 +272,37 @@ public:
         }
     }
 
-    void ProcessOneFrame(BufView &out) {
+    void ProcessOneFrame(float *out) {
         // Process all grains and produce output
-        // zero the output buffer        
+        // zero the output buffer
+        for (size_t chan = 0; chan < chans_; ++chan) {
+            out[chan] = 0.f;
+            sig_[chan] = 0.f;
+        }
+
         for (auto &g : grains_) {
-            g.ProcessOneFrame(sig);
+            for (size_t chan = 0; chan < chans_; ++chan) {
+                sig_[chan] = 0.f; // reset the single frame buffer
+            }
+            g.ProcessOneFrame(sig_);
             // add the sig to the output
-            for (size_t chan = 0; chan < buf_.chans(); ++chan) {
-                out.get()[chan] += sig.at(0, chan); // accumulate the output
+            for (size_t chan = 0; chan < chans_; ++chan) {
+                out[chan] += sig_[chan]; // accumulate the output
             }
         }
     }
 
 public:
     float sr_;
-    BufView buf_;
+    float *buf_;
+    size_t frames_;
+    size_t chans_;
+
     std::array<Grain, 4> grains_; // array of grains, can be adjusted
     std::vector<size_t> busy_grain_idxs; // indices of busy grains
 
     std::vector<float> sig_data; // signal buffer for processing
-    BufView sig; // a single frame buffer for output
+    float *sig_; // a single frame buffer for output
     
 };
 
@@ -337,17 +317,22 @@ public:
               size_t buf_frames, 
               size_t buf_chans) {
         sr_ = sample_rate;
-        buf_.init(buffer, buf_frames, buf_chans);
-        poker_.Init(buf_.get(), buf_.frames(), buf_.chans());
-        grains_.Init(sr_, buf_.get(), buf_.frames(), buf_.chans());
+        assert(buffer != nullptr); // make sure the buffer is not null
+        buf_ = buffer;
+        frames_ = buf_frames;
+        chans_ = buf_chans;
+
+        poker_.Init(buf_, buf_frames, buf_chans);
+        poker_.SetOverdub(0.0f);
+        grains_.Init(sr_, buffer, buf_frames, buf_chans);
         clock_.Init(1.f / (glitch_dur_ * 0.001f), sr_);
 
-        buf_.clear();
+        std::fill(buf_, buf_ + (frames_ * chans_), 0.f);
     }
 
     float WrapPos(float pos) {
-        while (pos < 0.f) pos += buf_.frames();
-        while (pos >= buf_.frames()) pos -= buf_.frames();
+        while (pos < 0.f) pos += frames_;
+        while (pos >= frames_) pos -= frames_;
         return pos;
     }
 
@@ -356,7 +341,6 @@ public:
         glitch_start_pos_ = WrapPos(wpos_ - (glitch_dur_ * sr_ * 0.001f));
 
         // configure the metro, trigger the metro
-        clock_.SetFreq(1.f / (glitch_dur_ * 0.001f)); // set the metro frequency
         clock_.Reset();
 
         enabled_ = true; // enable the glitch engine
@@ -369,17 +353,18 @@ public:
     }
 
 
-    void ProcessOneFrame(BufView &out, BufView &in) {
-        // make sure chans match
-        // assert(buf_.chans() == in.chans()); 
-
+    void ProcessOneFrame(const float *in, float *out) {
         // zero the output buffer
-        for (size_t chan = 0; chan < out.chans(); ++chan) {
-            out.get()[chan] = 0.f;
+        for (size_t chan = 0; chan < chans_; ++chan) {
+            out[chan] = 0.f;
         }
 
         // always record into the buffer
-        poker_.Poke(wpos_, in.get());
+        // stop poking if we are enabled
+        poker_.Poke(
+            /*index=*/ enabled_ ? -1.f : wpos_,
+            /*in=*/ in
+        );
 
         // increment the write pos
         wpos_ += 1.f; // increment by one sample
@@ -388,8 +373,24 @@ public:
         // // check the clock to see if we need to trigger a glitch
         if ((clock_.Process()) && enabled_) {
             // start a new grain
-            float rate_st = pitch_ + (randf(-pitch_spread_, pitch_spread_));
-            float start_pos = WrapPos(glitch_start_pos_ + (randf(-spread_, spread_) * buf_.frames()));
+            
+
+            // float rate_st = pitch_ + (randf(-pitch_spread_, pitch_spread_));
+            float rate_st = pitch_;
+            if (pitch_spread_type_ == PitchSpreadType::PITCH_SPREAD_NONE) {
+                // no spread
+                rate_st = pitch_;
+            } else if (pitch_spread_type_ == PitchSpreadType::PITCH_SPREAD_RAND) {
+                // random spread
+                rate_st = pitch_ + (randf(-pitch_spread_, pitch_spread_));
+            } else if (pitch_spread_type_ == PitchSpreadType::PITCH_SPREAD_OCTAVES) {
+                // octave spread
+                int octaves = static_cast<int>(pitch_spread_ / 12.f);
+                int step = (rand() % (2 * octaves + 1)) - octaves; // random step between -octaves and +octaves
+                rate_st = pitch_ + (step * 12); // each octave is 12 semitones
+            }
+
+            float start_pos = WrapPos(glitch_start_pos_ + (randf(-spread_, 0.f) * frames_));
             // skip if we need to
             if ((randf(0.f, 1.f) < rskip_) && !just_triggered_) {
                 // skip this grain
@@ -409,8 +410,8 @@ public:
         grains_.ProcessOneFrame(out);
 
         // apply the level to the output
-        for (size_t chan = 0; chan < out.chans(); ++chan) {
-            out.get()[chan] *= level_; // apply the level
+        for (size_t chan = 0; chan < chans_; ++chan) {
+            out[chan] *= level_; // apply the level
         }
     }
 
@@ -424,12 +425,14 @@ public:
         pitch_spread_ = fclamp(pitch_spread, 0.f, 12.f); // clamp between 0 and 12 semitones
         level_ = fclamp(level, 0.f, 1.f); // clamp between 0 and 1
         env_atk_amt_ = fclamp(env_atk_amt, 0.f, 1.f); // clamp between 0 and 1
+
+        clock_.SetFreq(1.f / (glitch_dur_ * 0.001f)); // update the clock frequency
     }
 
     void PrintDebugState(daisy::DaisyPetal &hw){
         hw.seed.PrintLine("Glitch Engine State:");
         hw.seed.PrintLine("  Sample Rate: %f", sr_);
-        hw.seed.PrintLine("  Buffer Frames: %d", buf_.frames());
+        hw.seed.PrintLine("  Buffer Frames: %d", frames_);
         hw.seed.PrintLine("  Write Position: %f", wpos_);
         hw.seed.PrintLine("  Enabled: %d", enabled_);
         hw.seed.PrintLine("  Glitch Start Position: %f", glitch_start_pos_);
@@ -443,21 +446,33 @@ public:
         hw.seed.PrintLine("  Just Triggered: %d", just_triggered_);
         hw.seed.PrintLine("  Grains:");
         // print grains in a table to avoid clutter
-        hw.seed.PrintLine("  ID | State | Start Pos | End Pos | Rate (st) | Duration (ms) | Env Atk");
-        hw.seed.PrintLine("  -- | ----- | ---------- | -------- | --------- | ------------- | ---------");
-        auto getGrainState = [](const Grain &g) {
-            return (g.state() == Grain::State::IDLE) ? "IDLE"
-                                                     : "PLAYING";
-        };
+        hw.seed.PrintLine("  State | Start Pos | End Pos | Rate (st) | Duration (ms) | Env Atk");
+        hw.seed.PrintLine("  ----- | ---------- | -------- | --------- | ------------- | ---------");
         for (size_t i = 0; i < grains_.grains_.size(); ++i) {
             const auto& grain = grains_.grains_[i];
             grains_.grains_[i].PrintDebugState(hw);
             hw.seed.PrintLine(" ");
         }
     }
+
+    Metro & clock() {
+        return clock_;
+    }
+
+    enum class PitchSpreadType {
+        PITCH_SPREAD_NONE = 0,
+        PITCH_SPREAD_RAND,
+        PITCH_SPREAD_OCTAVES,
+    };
+
+    void SetPitchSpreadType(PitchSpreadType type) {
+        pitch_spread_type_ = type;
+    }
 private:
     float sr_;
-    BufView buf_;
+    float *buf_;
+    size_t frames_;
+    size_t chans_;
 
     Ipoke poker_;
     Grains grains_; // grains for glitching
@@ -473,6 +488,7 @@ private:
     float spread_ = 0.; // spread of each grain trigger position (0-1.f)
     float pitch_ = 0.f; // pitch shift in semitones
     float pitch_spread_ = 0.f; // pitch spread (+/-) in semitones
+    PitchSpreadType pitch_spread_type_ = PitchSpreadType::PITCH_SPREAD_RAND;
     float level_ = 1.f; // output level
     float env_atk_amt_ = 0.1f; // attack proportion for the envelope (0.-1.f)
 

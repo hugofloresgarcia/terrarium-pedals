@@ -1,6 +1,7 @@
 #include "daisy_petal.h"
 #include "daisysp.h"
 #include "terrarium.h"
+#include "lib/fsw.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -9,7 +10,7 @@ using namespace terrarium;
 // Declare a global daisy_petal for hardware access
 DaisyPetal  hw;
 
-bool        fsw1, fsw2, sw1, sw2, sw3, sw4;
+bool        sw1, sw2, sw3, sw4;
 bool        fsw1_momentary, fsw2_momentary = false; // for temporary bypass mode
 Led         led1, led2;
 
@@ -22,18 +23,57 @@ Parameter   knob1,
 
 float sr;
 
+FswState   fsw1, fsw2; // footswitch states
+
+
+void processFootSwitches(FswState &fsw1, FswState &fsw2) {
+    fsw1.pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();
+    fsw2.pressed = hw.switches[Terrarium::FOOTSWITCH_2].Pressed();
+
+    fsw1.rising = hw.switches[Terrarium::FOOTSWITCH_1].RisingEdge();
+    fsw2.rising = hw.switches[Terrarium::FOOTSWITCH_2].RisingEdge();
+
+    fsw1.falling = hw.switches[Terrarium::FOOTSWITCH_1].FallingEdge();
+    fsw2.falling = hw.switches[Terrarium::FOOTSWITCH_2].FallingEdge();
+
+    fsw1.time_held = hw.switches[Terrarium::FOOTSWITCH_1].TimeHeldMs();
+    fsw2.time_held = hw.switches[Terrarium::FOOTSWITCH_2].TimeHeldMs();
+
+    // update footswitch state
+    if(fsw1.rising) {
+        fsw1.state = !fsw1.state;
+        if (fsw1.state) {fsw2.state = false;} // if fsw1 is pressed, disengage fsw2
+    }
+    
+    if(fsw2.rising) {
+        fsw2.state = !fsw2.state;
+        if (fsw2.state) {fsw1.state = false;} // if fsw2 is pressed, disengage fsw1
+    }
+
+    if (fsw1.pressed && fsw1.time_held > kMomentaryFswTimeMs) {
+        fsw1.momentary = true;
+    } else if (fsw1.falling && fsw1.momentary) {
+        fsw1.momentary = false;
+        fsw1.state = false; // disengage bypass mode
+    }
+
+    if (fsw2.pressed && fsw2.time_held > kMomentaryFswTimeMs) {
+        fsw2.momentary = true;
+    } else if (fsw2.falling && fsw2.momentary) {
+        fsw2.momentary = false;
+        fsw2.state = false; // disengage bypass mode
+    }
+}
+
+
 /*
  * Process terrarium knobs and switches
  */
 void processTerrariumControls() {
     // update switch values
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_switch.html
-    if(hw.switches[Terrarium::FOOTSWITCH_1].RisingEdge()) {
-        fsw1 = !fsw1;
-    }
-    if(hw.switches[Terrarium::FOOTSWITCH_2].RisingEdge()) {
-        fsw2 = !fsw2;
-    }
+
+    processFootSwitches(fsw1, fsw2);
 
     sw1 = hw.switches[Terrarium::SWITCH_1].Pressed();
     sw2 = hw.switches[Terrarium::SWITCH_2].Pressed();
@@ -65,11 +105,13 @@ void callback(
     size_t                                size
     )
 {
+    // CONTROL RATE
     hw.ProcessAllControls();
     processTerrariumControls();
     led1.Update();
     led2.Update();
 
+    // AUDIO RATE
     for(size_t i = 0; i < size; i += 2)
     {
         // Process your signal here
@@ -107,7 +149,6 @@ int main(void)
 
     // Set samplerate for your processing like so:
     // verb.Init(samplerate);
-    fsw1 = true;
 
     hw.StartAdc();
     hw.StartAudio(callback);

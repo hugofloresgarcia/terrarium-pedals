@@ -2,7 +2,7 @@
 TARGET = your_pedal
 
 # Sources
-CPP_SOURCES = wrms.cpp 
+CPP_SOURCES = wigglrs.cpp 
 
 # Library Locations
 LIBDAISY_DIR = ../libDaisy
@@ -15,3 +15,4 @@ include $(SYSTEM_FILES_DIR)/Makefile
 # Include terrarium.h
 C_INCLUDES += -I../Terrarium
 
+LDFLAGS += -u _printf_float
