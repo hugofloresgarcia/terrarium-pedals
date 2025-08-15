@@ -3,7 +3,7 @@
 #include "terrarium.h"
 
 #include "lib/cenote_delay.h"
-#include "lib/vibrato.h"
+#include "vibrato.h"
 #include "lib/control_recorder.h"
 // #include "lib/settings.h"
 

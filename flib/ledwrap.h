@@ -8,8 +8,9 @@
 #include "daisysp.h"
 
 using namespace daisysp;
+using namespace daisy;
 
-namespace daisy
+namespace daisysp
 {
 
 

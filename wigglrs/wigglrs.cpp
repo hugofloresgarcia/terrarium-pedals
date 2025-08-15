@@ -2,7 +2,6 @@
 #include "daisysp.h"
 #include "terrarium.h"
 #include "lib/wigglr.h"
-#include "lib/vibrato.h"
 
 using namespace daisy;
 using namespace daisysp;
@@ -17,7 +16,7 @@ Led         led1, led2;
 
 
 Parameter   knob_wigglr1_vol, 
-            knob_wigglrs_wow, 
+            knob_wigglrs_jumpamt, 
             knob_wigglr2_vol, 
             knob_wigglr_odb, 
             knob_wigglrs_slew, 
@@ -38,8 +37,6 @@ float wigglr1_out[WIGGLR_CHANS];
 float wigglr2_out[WIGGLR_CHANS];
 
 Wigglr wigglr1, wigglr2;
-
-VibratoEngine vibrato;
 
 float fsw_held_ms = 300.f;
 float max_slew_ms = 2000.f;
@@ -146,7 +143,7 @@ Metro skip_metro;
 Maytrig skip_maytrig;
 
 void configure_worm(Wigglr &wigglr, float level, float overdub, 
-    float rate_slew_ms, bool oct_up, bool oct_down, 
+    float rate_slew_ms, bool jump_up, bool jump_down, float jump_semitones, 
     bool footswitch_rising, bool footswitch_held, LedWrap &led_wrap, 
     uint8_t may_skip_trig, float skip_prob)
 {
@@ -155,15 +152,15 @@ void configure_worm(Wigglr &wigglr, float level, float overdub,
     wigglr.SetOverdub(overdub);
     wigglr.SetRateSlewMs(rate_slew_ms); // convert to milliseconds
 
-    if (oct_down) {
+    if (jump_down) {
         wigglr.SetRateSemitones(
-            wigglr.GetTargetRateSemitones() - 12.f
-        ); // decrease by 1 octave
+            wigglr.GetTargetRateSemitones() - jump_semitones
+        ); // decrease by jump_semitones
     }
-    if (oct_up) {
+    if (jump_up) {
         wigglr.SetRateSemitones(
-            wigglr.GetTargetRateSemitones() + 12.f
-        ); // increase by 1 octave
+            wigglr.GetTargetRateSemitones() + jump_semitones
+        ); // increase by jump_semitones
     }
 
     if (footswitch_rising) {
@@ -246,7 +243,7 @@ void processTerrariumControls() {
     // update knob values
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_analog_control.html
     knob_wigglr1_vol .Process();
-    knob_wigglrs_wow .Process();
+    knob_wigglrs_jumpamt .Process();
     knob_wigglr2_vol .Process();
     knob_wigglr_odb  .Process();
     knob_wigglrs_slew.Process();
@@ -256,16 +253,19 @@ void processTerrariumControls() {
     may_skip_trig = 0; // DISABLE SKIP!!
     float skip_prob = knob_wigglr_skip.Value();
 
-
-    vibrato.SetLfoDepth(knob_wigglrs_wow.Value());
+    // map jumpamt to a the following discrete values = [1, 5, 7, 12]
+    static constexpr float jump_semitones_map[] = {1.f, 5.f, 7.f, 12.f};
+    size_t jump_semitones_idx = (size_t)(knob_wigglrs_jumpamt.Value() * 3.0f);
+    float jump_semitones = jump_semitones_map[jump_semitones_idx];    
 
     configure_worm(
         /*wigglr=*/             wigglr1, 
         /*level=*/              knob_wigglr1_vol.Value(),
         /*overdub=*/            knob_wigglr_odb.Value(),
         /*rate_slew_ms=*/       knob_wigglrs_slew.Value() * max_slew_ms, 
-        /*oct_up=*/             sw1_re,
-        /*oct_down=*/           sw2_re,
+        /*jump_up=*/             sw1_re,
+        /*jump_down=*/           sw2_re,
+        /*jump_semitones=*/     jump_semitones,
         /*footswitch_rising=*/  fsw1_rising,
         /*footswitch_held=*/    fsw1_held, 
         /*led_wrap=*/           led1_wrap, 
@@ -278,8 +278,9 @@ void processTerrariumControls() {
         /*level=*/              knob_wigglr2_vol.Value(),
         /*overdub=*/            knob_wigglr_odb.Value(),
         /*rate_slew_ms=*/       knob_wigglrs_slew.Value() * max_slew_ms, 
-        /*oct_up=*/             sw3_re,
-        /*oct_down=*/           sw4_re,
+        /*jump_up=*/             sw3_re,
+        /*jump_down=*/           sw4_re,
+        /*jump_semitones=*/     jump_semitones,
         /*footswitch_rising=*/  fsw2_rising,
         /*footswitch_held=*/    fsw2_held, 
         /*led_wrap=*/           led2_wrap, 
@@ -311,7 +312,7 @@ void callback(
 
         out[i] = SoftLimit(
             in[i] + 
-            vibrato.Process(wigglr1_out[0] + wigglr2_out[0])
+            wigglr1_out[0] + wigglr2_out[0]
         ); // mix both wigglrs
     }
 }
@@ -329,14 +330,12 @@ int main(void)
     led2.Init(hw.seed.GetPin(Terrarium::LED_2), false);
     led1_wrap.Init(led1, sr);
     led2_wrap.Init(led2, sr);
-    
-    vibrato.Init(sr);
-    vibrato.SetLfoFreq(1.f);
+
 
     // Initialize your knobs here like so:
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
     knob_wigglr1_vol. Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob_wigglrs_wow. Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob_wigglrs_jumpamt. Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR);
     knob_wigglr2_vol. Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::EXPONENTIAL);
     knob_wigglr_odb.  Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::EXPONENTIAL);
     knob_wigglrs_slew.Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::EXPONENTIAL);

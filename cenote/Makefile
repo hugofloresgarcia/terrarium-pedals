@@ -14,4 +14,5 @@ include $(SYSTEM_FILES_DIR)/Makefile
 
 # Include terrarium.h
 C_INCLUDES += -I../Terrarium
+C_INCLUDES += -I../flib
 

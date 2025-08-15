@@ -28,6 +28,14 @@ public:
         }
     }
 
+    void SetShiftValue(size_t idx, float value)
+    {
+        if (idx < num_knobs_)
+        {
+            values_shift_[idx] = value;
+        }
+    }
+
     bool ProcessKnobs(std::array<float, 8> &hw_knobs)
     {
         bool notify_takeover = false;
@@ -63,6 +71,8 @@ public:
 
     float GetNormalValue(size_t idx) const { return values_norm_[idx]; }
     float GetShiftValue(size_t idx) const { return values_shift_[idx]; }
+
+
 
 private:
     bool shift_active_;

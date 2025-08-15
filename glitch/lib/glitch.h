@@ -6,7 +6,6 @@
 
 #include "daisysp.h"
 #include "ipoke.h"
-#include "stack.h"
 #include <array>
 
 // pedal UI template
@@ -211,6 +210,8 @@ public:
     float env_atk_ = 0.01f; // fraction of the duration for attack time (smaller values = faster attack)
 };
 
+
+
 class Grains
 {
 public:
@@ -306,6 +307,92 @@ public:
     
 };
 
+
+struct GrainEvent {
+    float pos_samples;
+    float rate_st;
+    float dur_ms;
+    float env_atk;
+    bool skipped;
+};
+
+class GrainPattern {
+public:
+    GrainPattern() {}
+    ~GrainPattern() {}
+
+    void Init(size_t max_pattern_length = 16) {
+        max_pattern_length_ = max_pattern_length;
+        pattern_.reserve(max_pattern_length_);
+        Reset();
+    }
+
+    void Reset() {
+        pattern_.clear();
+        record_idx_ = 0;
+        playback_idx_ = 0;
+        recording_ = false;
+        playback_ = false;
+    }
+
+    void SetPatternLength(size_t length) {
+        pattern_length_ = length > max_pattern_length_ ? max_pattern_length_ : length;
+        Reset();
+    }
+
+    void EnableRecording(bool enable) {
+        recording_ = enable;
+        if (enable) {
+            pattern_.clear();
+            record_idx_ = 0;
+        }
+    }
+
+    void EnablePlayback(bool enable) {
+        playback_ = enable;
+        playback_idx_ = 0;
+    }
+
+    void RecordEvent(const GrainEvent &event) {
+        if (!recording_) return;
+
+        if (pattern_.size() < pattern_length_) {
+            pattern_.push_back(event);
+            record_idx_++;
+        }
+
+        // auto stop recording if pattern is full
+        if (pattern_.size() >= pattern_length_) {
+            recording_ = false;
+            playback_ = true; // optionally start playback automatically
+            playback_idx_ = 0;
+        }
+    }
+
+    const GrainEvent* GetNextEvent() {
+        if (!playback_ || pattern_.empty()) return nullptr;
+
+        const GrainEvent* e = &pattern_[playback_idx_];
+        playback_idx_ = (playback_idx_ + 1) % pattern_.size();
+        return e;
+    }
+
+    bool IsRecording() const { return recording_; }
+    bool IsPlaying() const { return playback_; }
+    size_t PatternSize() const { return pattern_.size(); }
+
+private:
+    size_t max_pattern_length_ = 16;
+    size_t pattern_length_ = 8;
+    size_t record_idx_ = 0;
+    size_t playback_idx_ = 0;
+
+    bool recording_ = false;
+    bool playback_ = false;
+
+    std::vector<GrainEvent> pattern_;
+};
+
 class GlitchEngine 
 {
 public:
@@ -325,7 +412,9 @@ public:
         poker_.Init(buf_, buf_frames, buf_chans);
         poker_.SetOverdub(0.0f);
         grains_.Init(sr_, buffer, buf_frames, buf_chans);
+        pattern_.Init(16);
         clock_.Init(1.f / (glitch_dur_ * 0.001f), sr_);
+
 
         std::fill(buf_, buf_ + (frames_ * chans_), 0.f);
     }
@@ -362,7 +451,7 @@ public:
         // always record into the buffer
         // stop poking if we are enabled
         poker_.Poke(
-            /*index=*/ enabled_ ? -1.f : wpos_,
+            /*index=*/ (freeze_ && enabled_) ? -1.f : wpos_,
             /*in=*/ in
         );
 
@@ -373,9 +462,8 @@ public:
         // // check the clock to see if we need to trigger a glitch
         if ((clock_.Process()) && enabled_) {
             // start a new grain
-            
 
-            // float rate_st = pitch_ + (randf(-pitch_spread_, pitch_spread_));
+            // CALCULATE GRAIN EVENT PARAMS
             float rate_st = pitch_;
             if (pitch_spread_type_ == PitchSpreadType::PITCH_SPREAD_NONE) {
                 // no spread
@@ -389,18 +477,36 @@ public:
                 int step = (rand() % (2 * octaves + 1)) - octaves; // random step between -octaves and +octaves
                 rate_st = pitch_ + (step * 12); // each octave is 12 semitones
             }
-
+            float duration = glitch_dur_ * overlap_; // duration of the glitch in milliseconds
             float start_pos = WrapPos(glitch_start_pos_ + (randf(-spread_, 0.f) * frames_));
+            bool skip = (randf(0.f, 1.f) < rskip_) && !just_triggered_;
+
+            GrainEvent event;
+            if (pattern_.IsPlaying()) {
+                const GrainEvent* maybe_pattern_event = pattern_.GetNextEvent();
+                if (maybe_pattern_event) {
+                    event = GrainEvent(*maybe_pattern_event);
+                } else {
+                    event = { 
+                        .pos_samples = start_pos, 
+                        .rate_st = rate_st, 
+                        .dur_ms = duration, 
+                        .env_atk = env_atk_amt_,
+                        .skipped = skip
+                    };
+                    pattern_.RecordEvent(event);
+                }
+            }
             // skip if we need to
-            if ((randf(0.f, 1.f) < rskip_) && !just_triggered_) {
+            if (event.skipped) {
                 // skip this grain
             } else {
                 just_triggered_ = false;
                 grains_.TriggerGrain(
-                    /*pos_samples=*/ start_pos, 
-                    /*rate_st=*/ rate_st,
-                    /*dur_ms=*/ glitch_dur_,
-                    /*env_atk=*/ env_atk_amt_,
+                    /*pos_samples=*/ event.pos_samples, 
+                    /*rate_st=*/ event.rate_st,
+                    /*dur_ms=*/ event.dur_ms,
+                    /*env_atk=*/ event.env_atk,
                     /*steal=*/ true
                 );
             }
@@ -417,7 +523,7 @@ public:
 
     void SetGlitchParams(float glitch_dur, float rskip, float spread, 
                          float pitch, float pitch_spread, float level, 
-                         float env_atk_amt) {
+                         float env_atk_amt, bool freeze, float overlap) {
         glitch_dur_ = fclamp(glitch_dur, 20.f, 5000.f); // clamp between 20ms and 2000ms
         rskip_ = fclamp(rskip, 0.f, 1.f); // clamp between 0 and 1
         spread_ = fclamp(spread, 0.f, 1.f); // clamp between 0 and 1
@@ -425,6 +531,7 @@ public:
         pitch_spread_ = fclamp(pitch_spread, 0.f, 12.f); // clamp between 0 and 12 semitones
         level_ = fclamp(level, 0.f, 1.f); // clamp between 0 and 1
         env_atk_amt_ = fclamp(env_atk_amt, 0.f, 1.f); // clamp between 0 and 1
+        overlap_ = fclamp(overlap, 0.1f, 4.f); // clamp between 0.1 and 4
 
         clock_.SetFreq(1.f / (glitch_dur_ * 0.001f)); // update the clock frequency
     }
@@ -481,6 +588,8 @@ private:
     float wpos_ = 0.f; // write position in the buffer
     bool enabled_ = true; // whether the glitch engine is enabled
 
+    GrainPattern pattern_;
+
     // params
     float glitch_start_pos_ = 0.f; // start position in samples of the triggered glitch. 
     float glitch_dur_ = 80.f; // duration of the glitch in milliseconds
@@ -491,6 +600,8 @@ private:
     PitchSpreadType pitch_spread_type_ = PitchSpreadType::PITCH_SPREAD_RAND;
     float level_ = 1.f; // output level
     float env_atk_amt_ = 0.1f; // attack proportion for the envelope (0.-1.f)
+    bool freeze_ = false; // whether to freeze the buffer on trigger. 
+    float overlap_ = 0.f; // overlap amount (0-1.f) for the grains, not used yet
 
     bool just_triggered_ = false; // whether the glitch was just triggered
 
