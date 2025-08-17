@@ -24,7 +24,12 @@ public:
         {
             shift_active_ = shift;
             // On mode change, takeover must be re-caught for all knobs
-            takeover_ready_.fill(false);
+            // only if shift is true
+            if (shift) {
+                takeover_ready_.fill(false);
+            } else {
+                takeover_ready_.fill(true);
+            }
         }
     }
 

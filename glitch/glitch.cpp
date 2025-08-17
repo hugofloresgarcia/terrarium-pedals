@@ -7,6 +7,8 @@
 #include "shiftknobman.h"
 #include "fsw.h"
 #include "fmath.h"
+#include "knob.h"
+
 
 #define BUF_SIZE (48000 * 10)  // 10 seconds of audio at 48kHz
 #define CHANS 1                // mono :(
@@ -16,9 +18,50 @@ using namespace daisy;
 using namespace daisysp;
 using namespace terrarium;
 
-// Declare a global daisy_petal for hardware access
+// **************************************************
+// HARDWARE
+// **************************************************
+
+// globals
 DaisyPetal  hw;
+float sr; // sample rate
+
+// hardware
 FswState   fsw1, fsw2; // footswitch states
+bool        sw1, sw2, sw3, sw4;
+Led         led1, led2;
+LedWrap     ledw1, ledw2;
+
+// knobs
+FKnob      knob_glitch_dur, 
+            knob_glitch_spread, 
+            knob_pitch, 
+            knob_rskip, 
+            knob_level, 
+            knob_env;
+
+// knob indices 
+enum KNOB {
+    KNOB_GLITCH_DUR = 0,
+    KNOB_GLITCH_SPREAD,
+    KNOB_PITCH,
+    KNOB_PATTERN,
+    KNOB_LEVEL,
+    KNOB_ENV,
+    KNOB_LAST
+};
+// manager for shift-functions for knobs
+ShiftKnobManager skm;
+
+// the glitch engine
+GlitchEngine glitch;
+
+// our buffer, for the glitch engine
+float DSY_SDRAM_BSS buf[BUF_SIZE * CHANS];
+
+// **************************************************
+// SETTINGS
+// **************************************************
 
 // only save the "shift knob" settings to persist.
 struct GlitchSettings {
@@ -43,32 +86,9 @@ PersistentStorage<GlitchSettings> saved_settings(hw.seed.qspi);
 GlitchSettings settings;
 bool trigger_save = false;
 
-bool        sw1, sw2, sw3, sw4;
-Led         led1, led2;
-LedWrap     ledw1, ledw2;
-
-Parameter   knob_glitch_dur, 
-            knob_glitch_spread, 
-            knob_pitch, 
-            knob_rskip, 
-            knob_level, 
-            knob_env;
-
-enum KNOB {
-    KNOB_GLITCH_DUR = 0,
-    KNOB_GLITCH_SPREAD,
-    KNOB_PITCH,
-    KNOB_RSKIP,
-    KNOB_LEVEL,
-    KNOB_ENV,
-    KNOB_LAST
-};
-ShiftKnobManager skm;
-
-GlitchEngine glitch;
-float sr;
-
-float DSY_SDRAM_BSS buf[BUF_SIZE * CHANS];
+// **************************************************
+// CONTROL RATE: FOOTSWITCHES
+// **************************************************
 
 void processFootSwitches(FswState &fsw1, FswState &fsw2) {
     fsw1.pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();
@@ -86,12 +106,12 @@ void processFootSwitches(FswState &fsw1, FswState &fsw2) {
     // update footswitch state
     if(fsw1.rising) {
         fsw1.state = !fsw1.state;
-        if (fsw1.state) {fsw2.state = false;} // if fsw1 is pressed, disengage fsw2
+        // if (fsw1.state) {fsw2.state = false;} // if fsw1 is pressed, disengage fsw2
     }
     
     if(fsw2.rising) {
         fsw2.state = !fsw2.state;
-        if (fsw2.state) {fsw1.state = false;} // if fsw2 is pressed, disengage fsw1
+        // if (fsw2.state) {fsw1.state = false;} // if fsw2 is pressed, disengage fsw1
     }
 
     if (fsw1.pressed && fsw1.time_held > kMomentaryFswTimeMs) {
@@ -109,6 +129,10 @@ void processFootSwitches(FswState &fsw1, FswState &fsw2) {
     }
 }
 
+
+// **************************************************
+// CONTROL RATE: CONTROLS
+// **************************************************
 
 /*
  * Process terrarium knobs and switches
@@ -136,6 +160,10 @@ void processTerrariumControls() {
 
 }
 
+// **************************************************
+// CONTROL RATE: CONTROL BLOCK
+// **************************************************
+
 void controlBlock() {
     // process the shift knob manager
     std::array<float, 8> hw_knobs;
@@ -151,6 +179,8 @@ void controlBlock() {
     skm.SetShift(fsw2.momentary);
     bool takeover = skm.ProcessKnobs(hw_knobs);
     
+    // GLITCH MATH!!!!!
+    // how long will glitch be? 
     float glitch_dur = linlin(
         skm.GetNormalValue(KNOB_GLITCH_DUR), 
         0.0f, 1.0f, 20.0f, 2000.0f
@@ -161,19 +191,22 @@ void controlBlock() {
     glitch_dur += rand_dur;
     glitch_dur = fclamp(glitch_dur, 20.f, 5000.f); // clamp between 20ms and 5000ms
 
+    // glitch spread. 
     float glitch_spread = skm.GetNormalValue(KNOB_GLITCH_SPREAD);
 
+    // glitch pitch. 
     float pitch = linlin(
         skm.GetNormalValue(KNOB_PITCH), 
         0.0f, 1.0f, -12.0f, 12.0f
     );
-    // round pitch to the nearest semitone
-    pitch = roundf(pitch);
+    pitch = roundf(pitch); // round pitch to the nearest semitone
     float pitch_spread = skm.GetShiftValue(KNOB_PITCH) * 24.0f; // up to +/- 12 semitones of pitch spread
     pitch_spread = fclamp(pitch_spread, 0.f, 12.f); // clamp between 0 and 12 semitones
 
+    // random skip
+    float rskip = skm.GetShiftValue(KNOB_PATTERN);
 
-    float rskip = skm.GetNormalValue(KNOB_RSKIP);
+    // level
     float level = skm.GetNormalValue(KNOB_LEVEL);
     float env_atk_amt = skm.GetNormalValue(KNOB_ENV);
     float overlap = linlin(
@@ -181,20 +214,25 @@ void controlBlock() {
         0.0f, 1.0f, 0.1f, 4.0f
     ); // overlap is a percentage of the glitch duration
 
+    // PATTERN CONFIG
+    // glitch.SetPatternMode(sw2); // enable pattern mode if switch 2 is pressed
+    glitch.SetPatternLength((size_t)(skm.GetNormalValue(KNOB_ENV) * 16));
+
+    // reset pattern if our knobs move
+    if (knob_glitch_dur.Moved() ||
+            knob_glitch_spread.Moved() ||
+            knob_pitch.Moved() ||
+            knob_rskip.Moved() ||
+            knob_env.Moved()) {
+        glitch.ResetPattern();
+    }
+
+    // CONFIGURE GLITCH  
     glitch.SetPitchSpreadType(
         sw4 ? 
         GlitchEngine::PitchSpreadType::PITCH_SPREAD_RAND : 
         GlitchEngine::PitchSpreadType::PITCH_SPREAD_OCTAVES
     );
-
-    // update the glitch engine with the current parameters
-    // float glitch_dur = linlin(knob_glitch_dur.Value(), 0.0f, 1.0f, 20.0f, 5000.0f);
-    // float glitch_spread = knob_glitch_spread.Value();
-    // float pitch = linlin(knob_pitch.Value(), 0.0f, 1.0f, -12.0f, 12.0f);
-    // float pitch_spread = 0.0f;
-    // float rskip = knob_rskip.Value();
-    // float level = knob_level.Value();
-    // float env_atk_amt = knob_env.Value()
     glitch.SetGlitchParams(
         /*glitch_dur=*/ glitch_dur,
         /*rskip=*/ rskip,
@@ -203,10 +241,11 @@ void controlBlock() {
         /*pitch_spread=*/ pitch_spread,
         /*level=*/ level,
         /*env_atk_amt=*/ env_atk_amt,
-        /*freeze=*/ sw3, // freeze the buffer if the footswitch is pressed
+        /*freeze=*/ !sw3, // freeze the buffer if the footswitch is pressed
         /*overlap=*/ overlap // overlap is a percentage of the glitch duration
     );
 
+    // TRIGGER GLITCH!
     if (fsw1.rising) {
         glitch.clock().Reset();
         // TODO: should we delay this by a "dur" cycle, so that the audio when you step on the footswitch is not cut off?
@@ -216,11 +255,12 @@ void controlBlock() {
         glitch.TriggerGlitch();
     }
 
+    // STOP GLITCH? 
     if (!fsw1.state) {
         glitch.StopGlitch();
     }
 
-
+    // LED CONFIGS!
     if (takeover) { // notify user that the knob was taken over.
         ledw1.SetState(LedWrap::LedState::BLINK_SHORT, 500); // blink for 100ms on takeover
     } else if (fsw1.state && (ledw1.GetState() != LedWrap::LedState::BLINK_SHORT)) {
@@ -230,10 +270,46 @@ void controlBlock() {
     }
     ledw1.Process();
 
-    ledw2.SetState(LedWrap::LedState::BLINKING);
-    ledw2.SetBlinkRate(glitch.clock().GetFreq()); 
+    if (fsw2.momentary) { // on while in settings mode. 
+        ledw2.SetState(LedWrap::LedState::ON);
+    } else {
+        ledw2.SetState(LedWrap::LedState::BLINKING);
+        ledw2.SetBlinkRate(glitch.clock().GetFreq()); 
+    }
     ledw2.Process();
 }
+
+// **************************************************
+// SETTINGS: SAVE AND LOAD
+// **************************************************
+
+void Load() {
+    GlitchSettings &loaded_settings = saved_settings.GetSettings();
+
+    skm.SetShiftValue(KNOB_GLITCH_DUR, loaded_settings.shift_knob_glitch_dur);
+    skm.SetShiftValue(KNOB_GLITCH_SPREAD, loaded_settings.shift_knob_glitch_spread);
+    skm.SetShiftValue(KNOB_PITCH, loaded_settings.shift_knob_pitch);
+    skm.SetShiftValue(KNOB_PATTERN, loaded_settings.shift_knob_rskip);
+    skm.SetShiftValue(KNOB_LEVEL, loaded_settings.shift_knob_level);
+    skm.SetShiftValue(KNOB_ENV, loaded_settings.shift_knob_env);
+}
+
+void Save() {
+    GlitchSettings &stored_settings = saved_settings.GetSettings();
+
+    stored_settings.shift_knob_glitch_dur = skm.GetShiftValue(KNOB_GLITCH_DUR);
+    stored_settings.shift_knob_glitch_spread = skm.GetShiftValue(KNOB_GLITCH_SPREAD);
+    stored_settings.shift_knob_pitch = skm.GetShiftValue(KNOB_PITCH);
+    stored_settings.shift_knob_rskip = skm.GetShiftValue(KNOB_PATTERN);
+    stored_settings.shift_knob_level = skm.GetShiftValue(KNOB_LEVEL);
+    stored_settings.shift_knob_env = skm.GetShiftValue(KNOB_ENV);
+
+    trigger_save = true; // set flag to save in main loop
+}
+
+// **************************************************
+// AUDIO RATE: CALLBACK
+// **************************************************
 
 /*
  * This runs at a fixed rate, to prepare audio samples
@@ -249,6 +325,7 @@ void callback(
     hw.ProcessAllControls();
     processTerrariumControls();
     controlBlock();
+    Save(); // save settings if needed
 
     for(size_t i = 0; i < size; i += 2)
     {    
@@ -259,11 +336,14 @@ void callback(
         // Process the glitch engine
         glitch.ProcessOneFrame(s_in, s_out);
 
-        out[i] = in[i] + s_out[0] * 4.0f;
+        out[i] = in[i] + s_out[0];
         // out[i] = sample; // copy the input sample to the output buffer
     }
 }
 
+// **************************************************
+// DEBUGGING
+// **************************************************
 void PrintSignal(float* sig, size_t chans) {
     hw.seed.Print("(");
     for (size_t j = 0; j < chans; j++) {
@@ -272,29 +352,10 @@ void PrintSignal(float* sig, size_t chans) {
     hw.seed.Print(")\t");
 }
 
-void Load() {
-    GlitchSettings &loaded_settings = saved_settings.GetSettings();
 
-    skm.SetShiftValue(KNOB_GLITCH_DUR, loaded_settings.shift_knob_glitch_dur);
-    skm.SetShiftValue(KNOB_GLITCH_SPREAD, loaded_settings.shift_knob_glitch_spread);
-    skm.SetShiftValue(KNOB_PITCH, loaded_settings.shift_knob_pitch);
-    skm.SetShiftValue(KNOB_RSKIP, loaded_settings.shift_knob_rskip);
-    skm.SetShiftValue(KNOB_LEVEL, loaded_settings.shift_knob_level);
-    skm.SetShiftValue(KNOB_ENV, loaded_settings.shift_knob_env);
-}
-
-void Save() {
-    GlitchSettings &stored_settings = saved_settings.GetSettings();
-
-    stored_settings.shift_knob_glitch_dur = skm.GetShiftValue(KNOB_GLITCH_DUR);
-    stored_settings.shift_knob_glitch_spread = skm.GetShiftValue(KNOB_GLITCH_SPREAD);
-    stored_settings.shift_knob_pitch = skm.GetShiftValue(KNOB_PITCH);
-    stored_settings.shift_knob_rskip = skm.GetShiftValue(KNOB_RSKIP);
-    stored_settings.shift_knob_level = skm.GetShiftValue(KNOB_LEVEL);
-    stored_settings.shift_knob_env = skm.GetShiftValue(KNOB_ENV);
-
-    trigger_save = true; // set flag to save in main loop
-}
+// **************************************************
+// MAIN ENTRYPOINT
+// **************************************************
 
 int main(void)
 {
@@ -312,12 +373,12 @@ int main(void)
     
     // Initialize your knobs here like so:
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
-    knob_glitch_dur     .Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob_glitch_spread  .Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_pitch          .Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_rskip          .Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_level          .Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
-    knob_env            .Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
+    knob_glitch_dur     .Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::EXPONENTIAL, sr);
+    knob_glitch_spread  .Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR, sr);
+    knob_pitch          .Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR, sr);
+    knob_rskip          .Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR, sr);
+    knob_level          .Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR, sr);
+    knob_env            .Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR, sr);
     
     // init storage
     saved_settings.Init(settings);
@@ -330,18 +391,17 @@ int main(void)
     float target_default_overlap_knob_value = linlin(target_default_overlap_value, 0.1f, 4.0f, 0.1f, 1.0f);
     skm.SetShiftValue(KNOB_ENV, target_default_overlap_knob_value);
 
-    // load saved settings
-    Load();
-
     // Set samplerate for your processing like so:
     glitch.Init(sr, buf, BUF_SIZE, CHANS);
     
     hw.StartAdc();
     hw.StartAudio(callback);
-
+    
     // print: hello! 
     // then, then number of channels in the main buffer, 
-
+    // load saved settings
+    Load();
+    
     int i = 0;
     while(1)
     {
@@ -354,10 +414,10 @@ int main(void)
         // PrintSignal(s_out, CHANS);
 
         // print the LEDW states
-        ledw1.PrintDebugState(hw);
-        hw.seed.PrintLine("");
-        ledw2.PrintDebugState(hw);
-        hw.seed.PrintLine("");
+        // ledw1.PrintDebugState(hw);
+        // hw.seed.PrintLine("");
+        // ledw2.PrintDebugState(hw);
+        // hw.seed.PrintLine("");
 
         if (i % 4 == 0) {
             hw.seed.PrintLine("");

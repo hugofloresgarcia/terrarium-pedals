@@ -1,35 +1,15 @@
 #pragma once
-#ifndef HUGO_LIB_GRAINS_H
-#define HUGO_LIB_GRAINS_H
+#ifndef HUGO_LIB_GLITCH_H
+#define HUGO_LIB_GLITCH_H
 
 #ifdef __cplusplus
 
+#include "fmath.h"
+#include "grain.h"
 #include "daisysp.h"
 #include "ipoke.h"
 #include <array>
-
-// pedal UI template
-// --------------------------
-// *(?)* | *(?)* | *(?)* 
-// *(?)* | *(?)* | *(?)*
-//
-// (?) | (?) | (?) | (?)
-//
-// sw(?) | sw(?) 
-// --------------------------
-
-// An apple synth pedal
-// --------------------------
-//  (A)      | (B)       |  (env)
-//  (rskip)  | (metro)   |  (level)
-//
-//  (range)   | (metro on)   | (?) | (?) 
-//
-//  (momentary bypass)  | (tap tempo)
-// --------------------------
-// A = synth param 1
-// B = synth param 2
-// 
+#include "window.h"
 
 // A GLITCH PEDAL
 // **description**: hold to glitch, release to stop.
@@ -37,12 +17,12 @@
 // duration also has a metro that can trigger (or not) the glitch, as dictated by rskip prob. 
 // spread scans through the 10s buffer to pick each grain
 // --------------------------
-// (glitch duration/[SHIFT]rand dur amt) | (spread) | (pitch/[SHIFT]pitch spread)
-// (rskip/[SHIFT]filter)           | (level/[SHIFT]pattern length) | (env/[SHIFT]overlap ) 
+// (glitch duration/[SHIFT]rand dur amt) | (spread/[SHIFT]rand) | (pitch/[SHIFT]pitch spread)
+// (pattern/[SHIFT]rskip)           | (level/[SHIFT]) | (env/[SHIFT]overlap ) 
 //
-// (SHIFT) | (crush) | (random:pattern) | (atk-hard:atk-soft)
+// () | () | (oct/step) | ()
 //
-// (hold to record glitch) |  (tap tempo?---hold for hold)
+// (press/hold to glitch) |  (tap tempo?---hold for SHIFT)
 // 
 // extra: hold fsw2 THEN fsw1 to enter settings. there you can change the pattern length? 
 // --------------------------
@@ -63,250 +43,6 @@
 namespace daisysp
 {
 
-inline float randf(float min, float max) {
-    return min + (max - min) * (static_cast<float>(rand()) / RAND_MAX);
-}
-
-class Grain 
-{
-public:
-    Grain() {}
-    ~Grain() {}
-
-    enum class State
-    {
-        IDLE, 
-        PLAYING, 
-    };
-
-    void Init(float sample_rate, 
-         float* buffer, 
-         size_t buf_frames, 
-         size_t buf_chans) {
-        sr_ = sample_rate;
-
-        assert(buffer != nullptr); // make sure the buffer is not null
-        buf_ = buffer; // pointer to the buffer
-        frames_ = buf_frames;
-        chans_ = buf_chans;
-
-        peeker_.Init(buffer, buf_frames, buf_chans);
-        env_.Init(sr_);
-
-        pos_ = 0.f;
-        rate_st_ = 0.f;
-        dur_ms_ = 80.f;
-
-        state_ = State::IDLE;
-    }
-
-    State state() const {
-        return state_;
-    }
-
-
-
-    // trigger the grain. 
-    // pos_samples is the position in samples to start the grain from
-    // rate_st is the pitch shift in semitones
-    // dur_ms is the duration of the grain in milliseconds
-    // env_atk is the attack time in seconds (default 0.01s)
-    void Trigger(float pos_samples, float rate_st, float dur_ms, float env_atk = 0.01f) {
-        pos_ = pos_samples;
-        rate_st_ = rate_st;
-        dur_ms_ = dur_ms;
-        env_atk_ = env_atk;
-        start_pos_ = pos_samples;
-        end_pos_virtual_ = pos_samples + (dur_ms * sr_ * 0.001f); // end position in samples
-        end_pos_wrapped_ = WrapPos(end_pos_virtual_); // end position wrapped around the buffer
-
-        float atk_time = fclamp(env_atk_ * dur_ms_, 2.f, dur_ms_-2.f); // min 10ms atk
-        float decay_time = fclamp(dur_ms_ - atk_time, 2.f, dur_ms_); // min 5ms decay
-
-        env_.SetTime(ADENV_SEG_ATTACK, atk_time * 0.001f);
-        env_.SetTime(ADENV_SEG_DECAY, decay_time * 0.001f);
-        env_.SetMin(0.f);
-        env_.SetMax(1.f);
-        env_.Trigger();
-
-        state_ = State::PLAYING;
-    }
-
-    float WrapPos(float pos) {
-        while (pos < 0.f) pos += frames_;
-        while (pos >= frames_) pos -= frames_;
-        return pos;
-    }
-
-    void ProcessOneFrame(float *out) {
-        // Process the input buffer and produce output
-        if (state_ == State::IDLE) {
-            // do nothing
-            for (size_t chan = 0; chan < chans_; ++chan) {
-                out[chan] = 0.f;
-            }
-        } else if (state_ == State::PLAYING) {
-            // get envelope value
-            float env_val = env_.Process();
-            
-            // read from the buf
-            peeker_.Peek(pos_, out);
-
-            // apply the envelope to the output
-            for (size_t chan = 0; chan < chans_; ++chan) {
-                out[chan] *= env_val; // apply envelope
-            }
-        
-            // calculate the increment based on the rate
-            float inc = powf(2.f, rate_st_ / 12.0f);
-            pos_ += inc;
-            pos_ = WrapPos(pos_); // wrap around if needed
-            if (pos_ >= end_pos_wrapped_) {
-                pos_ = start_pos_; // reset to start position if we reach the end
-                // TODO: the above maybe should be a flag since it leads to musically different effects. 
-            }
-                        
-            // if the env is done, stop the grain
-            if (!env_.IsRunning()) {
-                state_ = State::IDLE;
-            }
-
-        }
-    }
-
-    void PrintDebugState(daisy::DaisyPetal &hw) {
-        hw.seed.Print(" %-5s | %10.2f | %8.2f | %9.2f | %13.2f | %     .2f", 
-                          (state_ == State::IDLE) ? "IDLE" : "PLAYING",
-                          start_pos_,
-                          end_pos_virtual_,
-                          rate_st_,
-                          dur_ms_,
-                          env_atk_);
-    }
-
-public: 
-    State state_;
-    AdEnv env_;
-
-    float sr_;
-    float *buf_ = nullptr; // pointer to the buffer
-    size_t frames_ = 0; // number of frames in the buffer
-    size_t chans_ = 0; // number of channels in the buffer
-
-    Ipeek peeker_;
-    
-    // playhead
-    float pos_;
-    
-    // direction
-    float direction_ = 1.f; // 1 for forward, -1 for backward
-
-    float start_pos_ = 0.f; // start position in samples
-    float end_pos_virtual_ = 0.f; // end position in samples (not wrapped)
-    float end_pos_wrapped_ = 0.f; // end position wrapped around the buffer
-
-    float rate_st_;
-    float dur_ms_;
-    float env_atk_ = 0.01f; // fraction of the duration for attack time (smaller values = faster attack)
-};
-
-
-
-class Grains
-{
-public:
-    Grains() {}
-    ~Grains() {}
-
-    void Init(float sample_rate, 
-              float* buffer, 
-              size_t buf_frames, 
-              size_t buf_chans) {
-        sr_ = sample_rate;
-        assert(buffer != nullptr); // make sure the buffer is not null
-        buf_ = buffer;
-        frames_ = buf_frames;
-        chans_ = buf_chans;
-
-        for (auto &g : grains_) {
-            g.Init(sr_, buf_, frames_, chans_);
-        }
-
-        sig_data.assign(1 * chans_, 0.f); // a single frame buffer.
-        sig_ = sig_data.data(); // pointer to the single frame buffer
-    }
-
-    void TriggerGrain(float pos_samples, 
-                      float rate_st, 
-                      float dur_ms, 
-                      float env_atk = 0.01f, 
-                      bool steal = true) {
-        // clear any grains that are no longer busy from the busy list
-        const auto notBusyAnymore = [this](size_t idx) {
-            return grains_[idx].state() != Grain::State::PLAYING;
-        };
-        busy_grain_idxs.erase(
-            std::remove_if(
-                busy_grain_idxs.begin(), busy_grain_idxs.end(), 
-                notBusyAnymore
-            ), 
-            busy_grain_idxs.end()
-        );
-
-        // trigger the first available grain
-        for (size_t i = 0; i < grains_.size(); ++i)
-        {
-            if (grains_[i].state() == Grain::State::IDLE) {
-                grains_[i].Trigger(pos_samples, rate_st, dur_ms, env_atk);
-                busy_grain_idxs.insert(busy_grain_idxs.begin(), i); // add it to the busy list
-                return; // only trigger one grain at a time
-            }
-        }
-
-        // if no idle grain found, steal the last triggered grain
-        if (steal && !busy_grain_idxs.empty()) {
-            size_t idx = busy_grain_idxs.back(); // get the last busy grain
-            grains_[idx].Trigger(pos_samples, rate_st, dur_ms, env_atk);
-            busy_grain_idxs.pop_back(); // remove it from the busy list
-            busy_grain_idxs.insert(busy_grain_idxs.begin(), idx);
-            return;
-        }
-    }
-
-    void ProcessOneFrame(float *out) {
-        // Process all grains and produce output
-        // zero the output buffer
-        for (size_t chan = 0; chan < chans_; ++chan) {
-            out[chan] = 0.f;
-            sig_[chan] = 0.f;
-        }
-
-        for (auto &g : grains_) {
-            for (size_t chan = 0; chan < chans_; ++chan) {
-                sig_[chan] = 0.f; // reset the single frame buffer
-            }
-            g.ProcessOneFrame(sig_);
-            // add the sig to the output
-            for (size_t chan = 0; chan < chans_; ++chan) {
-                out[chan] += sig_[chan]; // accumulate the output
-            }
-        }
-    }
-
-public:
-    float sr_;
-    float *buf_;
-    size_t frames_;
-    size_t chans_;
-
-    std::array<Grain, 4> grains_; // array of grains, can be adjusted
-    std::vector<size_t> busy_grain_idxs; // indices of busy grains
-
-    std::vector<float> sig_data; // signal buffer for processing
-    float *sig_; // a single frame buffer for output
-    
-};
-
 
 struct GrainEvent {
     float pos_samples;
@@ -317,6 +53,7 @@ struct GrainEvent {
 };
 
 class GrainPattern {
+
 public:
     GrainPattern() {}
     ~GrainPattern() {}
@@ -329,69 +66,40 @@ public:
 
     void Reset() {
         pattern_.clear();
-        record_idx_ = 0;
-        playback_idx_ = 0;
-        recording_ = false;
-        playback_ = false;
+        pattern_idx_ = 0;
+    } 
+
+    // process a grain event, 
+    // either replacing it with a previously stored pattern 
+    // or simply passing it throug
+    void ProcessEvent(GrainEvent &event) {
+        if (pattern_.size() >= pattern_length_) { 
+            // we have recorded enough events, just play them back
+            event = pattern_[pattern_idx_];
+        } else {
+            // we have not recorded enough events, just pass it through and record it
+            pattern_.push_back(event);
+        }
+
+        // inc and wrap pattern index
+        pattern_idx_++;
+        if (pattern_idx_ >= pattern_length_) {
+            pattern_idx_ = 0;
+        }
     }
 
     void SetPatternLength(size_t length) {
-        pattern_length_ = length > max_pattern_length_ ? max_pattern_length_ : length;
-        Reset();
+        length = (length < 1) ? 1 : length;
+        pattern_length_ = length;
     }
-
-    void EnableRecording(bool enable) {
-        recording_ = enable;
-        if (enable) {
-            pattern_.clear();
-            record_idx_ = 0;
-        }
-    }
-
-    void EnablePlayback(bool enable) {
-        playback_ = enable;
-        playback_idx_ = 0;
-    }
-
-    void RecordEvent(const GrainEvent &event) {
-        if (!recording_) return;
-
-        if (pattern_.size() < pattern_length_) {
-            pattern_.push_back(event);
-            record_idx_++;
-        }
-
-        // auto stop recording if pattern is full
-        if (pattern_.size() >= pattern_length_) {
-            recording_ = false;
-            playback_ = true; // optionally start playback automatically
-            playback_idx_ = 0;
-        }
-    }
-
-    const GrainEvent* GetNextEvent() {
-        if (!playback_ || pattern_.empty()) return nullptr;
-
-        const GrainEvent* e = &pattern_[playback_idx_];
-        playback_idx_ = (playback_idx_ + 1) % pattern_.size();
-        return e;
-    }
-
-    bool IsRecording() const { return recording_; }
-    bool IsPlaying() const { return playback_; }
-    size_t PatternSize() const { return pattern_.size(); }
 
 private:
     size_t max_pattern_length_ = 16;
     size_t pattern_length_ = 8;
-    size_t record_idx_ = 0;
-    size_t playback_idx_ = 0;
-
-    bool recording_ = false;
-    bool playback_ = false;
-
+    size_t pattern_idx_ = 0;
     std::vector<GrainEvent> pattern_;
 };
+
 
 class GlitchEngine 
 {
@@ -415,8 +123,11 @@ public:
         pattern_.Init(16);
         clock_.Init(1.f / (glitch_dur_ * 0.001f), sr_);
 
+        window_.Init(sr_);
+        window_.BeginFadeIn(kWindowFadeMs);
 
         std::fill(buf_, buf_ + (frames_ * chans_), 0.f);
+        sig_.assign(1 * chans_, 0.f); // a single frame buffer.
     }
 
     float WrapPos(float pos) {
@@ -427,10 +138,11 @@ public:
 
     void TriggerGlitch() {
         // lock the current pos as the glitch start position
-        glitch_start_pos_ = WrapPos(wpos_ - (glitch_dur_ * sr_ * 0.001f));
+        glitch_start_pos_ = WrapPos(wpos_ - (glitch_dur_  * sr_ * 0.001f));
 
         // configure the metro, trigger the metro
         clock_.Reset();
+        clock_idx_ = 0;
 
         enabled_ = true; // enable the glitch engine
         just_triggered_ = true; // set the flag to true
@@ -441,26 +153,55 @@ public:
         enabled_ = false; // don't allow any more glitches
     }
 
-
     void ProcessOneFrame(const float *in, float *out) {
         // zero the output buffer
         for (size_t chan = 0; chan < chans_; ++chan) {
             out[chan] = 0.f;
         }
 
+        // check if we should write to the buffer
+        bool should_write = !(freeze_ && enabled_ && clock_idx_ > 0);
+        if (should_write && !last_should_write_) {
+            // we just started writing
+            window_.BeginFadeIn(kWindowFadeMs);
+        } else if (!should_write && last_should_write_) {
+            // we just stopped writing
+            window_.BeginFadeOut(kWindowFadeMs);
+        }
+        last_should_write_ = should_write;
+
+        // apply window to input
+        float win = window_.ProcessOneFrame(); // get the window value
+        for (size_t chan = 0; chan < chans_; ++chan) {
+            sig_[chan] = in[chan] * win;
+        }
+
         // always record into the buffer
         // stop poking if we are enabled
+        bool window_off = (window_.IsOff());
         poker_.Poke(
-            /*index=*/ (freeze_ && enabled_) ? -1.f : wpos_,
-            /*in=*/ in
+            /*index=*/ window_off ? -1.f : wpos_,
+            /*in=*/ sig_.data()
         );
 
         // increment the write pos
-        wpos_ += 1.f; // increment by one sample
-        wpos_ = WrapPos(wpos_); // wrap around if needed
+        if (!window_off) {
+            wpos_ += 1.f; // increment by one sample
+            wpos_ = WrapPos(wpos_); // wrap around if needed
+        }
+
+        if (!(freeze_ && enabled_)) {
+            glitch_start_pos_ = wpos_;
+        }
 
         // // check the clock to see if we need to trigger a glitch
-        if ((clock_.Process()) && enabled_) {
+        uint8_t clock_tick = clock_.Process();
+        if (clock_tick) clock_idx_++; // increment the clock index
+
+        // don't begin until clock index is 1, 
+        // this way we "record" the glitch during the first clock tick. 
+        bool should_trigger = clock_tick && enabled_ && clock_idx_ > 0;
+        if (should_trigger) {
             // start a new grain
 
             // CALCULATE GRAIN EVENT PARAMS
@@ -478,24 +219,38 @@ public:
                 rate_st = pitch_ + (step * 12); // each octave is 12 semitones
             }
             float duration = glitch_dur_ * overlap_; // duration of the glitch in milliseconds
-            float start_pos = WrapPos(glitch_start_pos_ + (randf(-spread_, 0.f) * frames_));
+
+            // if the rate is < 1, we need to start earlier to avoid going out of bounds
+            float rate = powf(2, rate_st / 12.f);
+            
+            // BEGIN CALCULATE start_pos
+            float start_pos = glitch_start_pos_;
+            // adjust start position depending on the rate we sampled
+            if (rate < 1.f || overlap_ > 1.f) {
+                start_pos += (glitch_dur_ * sr_ * 0.001f); // for arithmetic
+                // now, move back by the amount we will play during the grain
+                // `duration` already takes overlap into account, so we just need to account for rate
+                start_pos -= ((duration * 0.001f) * sr_ / rate);
+                start_pos = WrapPos(start_pos);
+            }
+            // apply spread to the start position // (only to the past as to not go out of bounds)
+            start_pos = WrapPos(start_pos + (randf(-spread_, 0.f) * frames_));
+            // END CALCULATE start_pos
+
+            // decide if we should skip this grain based on rskip probability
             bool skip = (randf(0.f, 1.f) < rskip_) && !just_triggered_;
 
-            GrainEvent event;
-            if (pattern_.IsPlaying()) {
-                const GrainEvent* maybe_pattern_event = pattern_.GetNextEvent();
-                if (maybe_pattern_event) {
-                    event = GrainEvent(*maybe_pattern_event);
-                } else {
-                    event = { 
-                        .pos_samples = start_pos, 
-                        .rate_st = rate_st, 
-                        .dur_ms = duration, 
-                        .env_atk = env_atk_amt_,
-                        .skipped = skip
-                    };
-                    pattern_.RecordEvent(event);
-                }
+            // create a default grain event, 
+            // this may be replaced if pattern is playing
+            GrainEvent event = { 
+                .pos_samples = start_pos, 
+                .rate_st = rate_st, 
+                .dur_ms = duration, 
+                .env_atk = env_atk_amt_,
+                .skipped = skip
+            };
+            if (pattern_mode_) {
+                pattern_.ProcessEvent(event); // process the event through the pattern
             }
             // skip if we need to
             if (event.skipped) {
@@ -521,6 +276,19 @@ public:
         }
     }
 
+    void SetPatternLength(size_t length) {
+        if (length < 1) {
+            pattern_mode_ = false;
+        } else {
+            pattern_mode_ = true;
+            pattern_.SetPatternLength(length);
+        }
+    }
+
+    void ResetPattern() {
+        pattern_.Reset();
+    }
+
     void SetGlitchParams(float glitch_dur, float rskip, float spread, 
                          float pitch, float pitch_spread, float level, 
                          float env_atk_amt, bool freeze, float overlap) {
@@ -531,6 +299,7 @@ public:
         pitch_spread_ = fclamp(pitch_spread, 0.f, 12.f); // clamp between 0 and 12 semitones
         level_ = fclamp(level, 0.f, 1.f); // clamp between 0 and 1
         env_atk_amt_ = fclamp(env_atk_amt, 0.f, 1.f); // clamp between 0 and 1
+        freeze_ = freeze; // set the freeze state
         overlap_ = fclamp(overlap, 0.1f, 4.f); // clamp between 0.1 and 4
 
         clock_.SetFreq(1.f / (glitch_dur_ * 0.001f)); // update the clock frequency
@@ -552,11 +321,20 @@ public:
         hw.seed.PrintLine("  Envelope Attack Amount: %f", env_atk_amt_);
         hw.seed.PrintLine("  Just Triggered: %d", just_triggered_);
         hw.seed.PrintLine("  Grains:");
+        hw.seed.PrintLine("  clock idx: %d", clock_idx_);
+        hw.seed.PrintLine("  Last Should Write: %d", last_should_write_);
+        hw.seed.PrintLine("  Window State: %s", 
+            window_.IsOn() ? "On" : 
+            window_.IsOff() ? "Off" : 
+            window_.IsFadingIn() ? "Fading In" :
+            window_.IsFadingOut() ? "Fading Out" : "Unknown"
+        );
+        hw.seed.PrintLine("  Pattern Mode: %d", pattern_mode_);
+
         // print grains in a table to avoid clutter
         hw.seed.PrintLine("  State | Start Pos | End Pos | Rate (st) | Duration (ms) | Env Atk");
         hw.seed.PrintLine("  ----- | ---------- | -------- | --------- | ------------- | ---------");
         for (size_t i = 0; i < grains_.grains_.size(); ++i) {
-            const auto& grain = grains_.grains_[i];
             grains_.grains_[i].PrintDebugState(hw);
             hw.seed.PrintLine(" ");
         }
@@ -575,20 +353,27 @@ public:
     void SetPitchSpreadType(PitchSpreadType type) {
         pitch_spread_type_ = type;
     }
+
 private:
     float sr_;
     float *buf_;
     size_t frames_;
     size_t chans_;
 
+    std::vector<float> sig_; // signal buffer for processing
+
     Ipoke poker_;
     Grains grains_; // grains for glitching
     Metro clock_; // grain clock
+    size_t clock_idx_ = 0;
 
     float wpos_ = 0.f; // write position in the buffer
     bool enabled_ = true; // whether the glitch engine is enabled
 
+    bool last_should_write_ = false; // whether we wrote to the buffer last time
+
     GrainPattern pattern_;
+    bool pattern_mode_ = false; // whether the pattern mode is enabled
 
     // params
     float glitch_start_pos_ = 0.f; // start position in samples of the triggered glitch. 
@@ -605,9 +390,11 @@ private:
 
     bool just_triggered_ = false; // whether the glitch was just triggered
 
+    Window window_;
+    static constexpr float kWindowFadeMs = 50.f; // fade in the window over 50ms
 };
 
 } // namespace daisysp
 
 #endif // __cplusplus
-#endif // HUGO_LIB_GRAINS_H
+#endif // HUGO_LIB_GLITCH_H
