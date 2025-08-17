@@ -255,7 +255,7 @@ void processTerrariumControls() {
 
     // map jumpamt to a the following discrete values = [1, 5, 7, 12]
     static constexpr float jump_semitones_map[] = {1.f, 5.f, 7.f, 12.f};
-    size_t jump_semitones_idx = (size_t)(knob_wigglrs_jumpamt.Value() * 3.0f);
+    size_t jump_semitones_idx = (size_t)(knob_wigglrs_jumpamt.Value() * 3.99f);
     float jump_semitones = jump_semitones_map[jump_semitones_idx];    
 
     configure_worm(
