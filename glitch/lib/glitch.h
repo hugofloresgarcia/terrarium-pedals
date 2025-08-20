@@ -93,6 +93,14 @@ public:
         pattern_length_ = length;
     }
 
+    size_t GetPatternLength() const {
+        return pattern_length_;
+    }
+
+    size_t GetPatternIndex() const {
+        return pattern_idx_;
+    }
+
 private:
     size_t max_pattern_length_ = 16;
     size_t pattern_length_ = 8;
@@ -153,7 +161,7 @@ public:
         enabled_ = false; // don't allow any more glitches
     }
 
-    void ProcessOneFrame(const float *in, float *out) {
+    void ProcessFrame(const float *in, float *out) {
         // zero the output buffer
         for (size_t chan = 0; chan < chans_; ++chan) {
             out[chan] = 0.f;
@@ -171,7 +179,7 @@ public:
         last_should_write_ = should_write;
 
         // apply window to input
-        float win = window_.ProcessOneFrame(); // get the window value
+        float win = window_.ProcessFrame(); // get the window value
         for (size_t chan = 0; chan < chans_; ++chan) {
             sig_[chan] = in[chan] * win;
         }
@@ -330,14 +338,8 @@ public:
             window_.IsFadingOut() ? "Fading Out" : "Unknown"
         );
         hw.seed.PrintLine("  Pattern Mode: %d", pattern_mode_);
-
-        // print grains in a table to avoid clutter
-        hw.seed.PrintLine("  State | Start Pos | End Pos | Rate (st) | Duration (ms) | Env Atk");
-        hw.seed.PrintLine("  ----- | ---------- | -------- | --------- | ------------- | ---------");
-        for (size_t i = 0; i < grains_.grains_.size(); ++i) {
-            grains_.grains_[i].PrintDebugState(hw);
-            hw.seed.PrintLine(" ");
-        }
+        hw.seed.PrintLine("  Pattern Length: %d", pattern_.GetPatternLength());
+        hw.seed.PrintLine("  Pattern Index: %d", pattern_.GetPatternIndex());
     }
 
     Metro & clock() {
@@ -392,7 +394,7 @@ private:
 
     Window window_;
     static constexpr float kWindowFadeMs = 50.f; // fade in the window over 50ms
-};
+}; 
 
 } // namespace daisysp
 

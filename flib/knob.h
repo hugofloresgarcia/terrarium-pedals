@@ -17,9 +17,10 @@ public:
     ~FKnob() {};
 
     void Init(
-        AnalogControl input, float min, float max, 
+        AnalogControl &input, float min, float max, 
         Parameter::Curve curve, float sr
     ) {
+        input_ = input;
         param_.Init(input, min, max, curve);
         sr_ = sr;
         change_window_samples_ = (size_t)(
@@ -33,17 +34,18 @@ public:
 
     void Process() {
         param_.Process();
-        float val = input_.GetRawFloat();
+        val_ = input_.GetRawFloat();
     
         change_idx_++;
         if (change_idx_ >= change_window_samples_) {
             change_idx_ = 0;
-            change_last_value_ = val;
+            change_last_value_ = val_;
+            moved_ = false;
         }
 
-        if (fabs(val - change_last_value_) > change_threshold_) {
+        if (fabs(val_ - change_last_value_) > change_threshold_) {
             moved_ = true;
-        }
+        } 
     }
 
     bool Moved() const {
@@ -54,17 +56,28 @@ public:
         return param_;
     }
 
+    void PrintDebug(DaisyPetal &hw) {
+
+        hw.seed.PrintLine("  ");
+        hw.seed.PrintLine("  Knob Value: %f", Value());
+        hw.seed.PrintLine("  Knob Raw Value: %f", val_);
+        hw.seed.PrintLine("  Change Window Samples: %d", change_window_samples_);
+        hw.seed.PrintLine("  Change Last Value: %f", change_last_value_);
+        hw.seed.PrintLine("  Knob Moved: %d", Moved());
+    }
+
 private:
     AnalogControl input_;
     Parameter param_;
     float sr_;
+    float val_;
 
     bool moved_ = false;
-    float change_threshold_ = 0.05f;
+    float change_threshold_ = 0.02f;
 
     float change_last_value_ = 0.0f;
-    float change_window_ms_ = 50.0f;
-    size_t change_window_samples_ = 0;
+    float change_window_ms_ = 300.0f;
+    size_t change_window_samples_;
     size_t change_idx_ = 0;
 };
 

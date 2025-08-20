@@ -44,7 +44,7 @@ class Window
         idx_   = 0;
     }
 
-    float ProcessOneFrame()
+    float ProcessFrame()
     {
         switch(state_)
         {

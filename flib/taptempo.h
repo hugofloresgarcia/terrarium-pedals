@@ -1,6 +1,6 @@
 #pragma once
-#ifndef HUGO_LIB_GRAINS_H
-#define HUGO_LIB_GRAINS_H
+#ifndef HUGO_LIB_TAPTEMPO_H
+#define HUGO_LIB_TAPTEMPO_H
 
 #ifdef __cplusplus
 
@@ -19,4 +19,4 @@ class
 } // namespace daisysp
 
 #endif // __cplusplus
-#endif // HUGO_LIB_GRAINS_H
+#endif // HUGO_LIB_TAPTEMPO_H
