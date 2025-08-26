@@ -108,7 +108,6 @@ private:
     std::vector<GrainEvent> pattern_;
 };
 
-
 class GlitchEngine 
 {
 public:
@@ -228,17 +227,17 @@ public:
             }
             float duration = glitch_dur_ * overlap_; // duration of the glitch in milliseconds
 
-            // if the rate is < 1, we need to start earlier to avoid going out of bounds
+            // if the rate is > 1, we need to start earlier to avoid going out of bounds
             float rate = powf(2, rate_st / 12.f);
             
             // BEGIN CALCULATE start_pos
             float start_pos = glitch_start_pos_;
             // adjust start position depending on the rate we sampled
-            if (rate < 1.f || overlap_ > 1.f) {
-                start_pos += (glitch_dur_ * sr_ * 0.001f); // for arithmetic
+            if (rate > 1.f || overlap_ > 1.f) {
+                start_pos += (glitch_dur_ * sr_ * 0.001f); // for arithmetic, go to the original "end of grain"
                 // now, move back by the amount we will play during the grain
                 // `duration` already takes overlap into account, so we just need to account for rate
-                start_pos -= ((duration * 0.001f) * sr_ / rate);
+                start_pos -= ((duration * 0.001f) * sr_ * rate);
                 start_pos = WrapPos(start_pos);
             }
             // apply spread to the start position // (only to the past as to not go out of bounds)

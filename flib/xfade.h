@@ -31,16 +31,17 @@ public:
         ramp_.Init(sr_);
         ramp_.Start(0.0f, 0.0f, ramp_time_ms_);
 
+        SetCrossfadeType(TYPE::EQ_POWER); // default to power crossfade
     }
 
     void ProcessFrame(const float* sig_a,const float* sig_b, float* out) {
-        float x = ramp_.Process(&ramp_finished_);
+        val_ = ramp_.Process(&ramp_finished_);
 
         if (type_ == TYPE::EQ_GAIN) {
-            wa_ = 1 - x;
-            wb_ = x;
+            wa_ = 1 - val_;
+            wb_ = val_;
         } else if (type_ == TYPE::EQ_POWER) {
-            float theta = x * M_PI_2;
+            float theta = val_ * M_PI_2;
             wa_ = cosf(theta);
             wb_ = sinf(theta);
         }
@@ -52,7 +53,11 @@ public:
 
     void SetCrossfadeType(TYPE type) { type_ = type; }
 
-    void SetCrossfade(float x) { ramp_.Start(val_, x, ramp_time_ms_); }
+    void SetCrossfade(float x) { 
+        if (x != val_) {
+            ramp_.Start(val_, x, ramp_time_ms_ / 1000.0f); 
+        }
+    }
 
 private:
     // config

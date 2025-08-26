@@ -13,7 +13,7 @@
 
 #define BUF_SIZE (48000 * 10)  // 10 seconds of audio at 48kHz
 #define CHANS 1                // mono :(
-#define BLOCK_SIZE 2            // 2 samples per block for audio processing
+#define BLOCK_SIZE 4            // 4 samples per block for audio processing
 
 using namespace daisy;
 using namespace daisysp;
@@ -59,6 +59,7 @@ GlitchEngine glitch;
 
 // xfade
 Xfade xfade;
+Limiter limiter;
 
 // our buffer, for the glitch engine
 float DSY_SDRAM_BSS buf[BUF_SIZE * CHANS];
@@ -211,8 +212,12 @@ void controlBlock() {
     // random skip
     float rskip = skm.GetShiftValue(KNOB_PATTERN);
 
-    // level
-    xfade.SetCrossfade(skm.GetNormalValue(KNOB_LEVEL));
+    // level also acts as a bypass switch
+    xfade.SetCrossfade(
+        fsw1.state ? 
+        skm.GetNormalValue(KNOB_LEVEL)
+        : 0.0f
+    );
 
     // float level = skm.GetNormalValue(KNOB_LEVEL); // now a xfade
     float env_atk_amt = skm.GetNormalValue(KNOB_ENV);
@@ -345,9 +350,11 @@ void callback(
             
         // Process the glitch engine
         glitch.ProcessFrame(s_in, glitch_out);
+        limiter.ProcessBlock(glitch_out, CHANS, 1.0);
         xfade.ProcessFrame(s_in, glitch_out, s_out);
 
         out[i] = s_out[0];
+        // out[i] = s_in[0] + glitch_out[0];
         // out[i] = sample; // copy the input sample to the output buffer
     }
 }
@@ -416,6 +423,8 @@ int main(void)
     xfade.Init(sr, CHANS, 10.0f);
     xfade.SetCrossfadeType(Xfade::TYPE::EQ_POWER); // default to power crossfade
     hw.seed.PrintLine("Initialized xfade with %d channels", CHANS);
+
+    limiter.Init();
 
     hw.StartAdc();
     hw.StartAudio(callback);
