@@ -2,6 +2,19 @@
 #include <array>
 #include <cmath>
 
+
+
+bool knobMoved(float old_value, float new_value)
+{
+    float tolerance = 0.001;
+    if (new_value > (old_value + tolerance) || new_value < (old_value - tolerance)) {
+        return true;
+    } else {
+        return false;
+    }
+}
+
+
 class ShiftKnobManager
 {
 public:
@@ -51,8 +64,14 @@ public:
 
             if (!takeover_ready_[i])
             {
-                // Wait until hardware knob is close enough to stored value
-                if (std::fabs(hw_val - active_val) <= TOUCH_THRESHOLD)
+                // // Wait until hardware knob is close enough to stored value
+                // if (std::fabs(hw_val - active_val) <= TOUCH_THRESHOLD)
+                // {
+                //     takeover_ready_[i] = true;
+                //     notify_takeover = true; // Notify that a takeover has occurred
+                // }
+                // wait until knob moves
+                if (knobMoved(last_hw_values_[i], hw_val))
                 {
                     takeover_ready_[i] = true;
                     notify_takeover = true; // Notify that a takeover has occurred

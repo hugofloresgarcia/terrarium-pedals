@@ -146,8 +146,6 @@ public:
     float pos_;
     
     // direction
-    float direction_ = 1.f; // 1 for forward, -1 for backward
-
     float start_pos_ = 0.f; // start position in samples
     float end_pos_virtual_ = 0.f; // end position in samples (not wrapped)
     float end_pos_wrapped_ = 0.f; // end position wrapped around the buffer
@@ -235,6 +233,16 @@ public:
             for (size_t chan = 0; chan < chans_; ++chan) {
                 out[chan] += sig_[chan]; // accumulate the output
             }
+        }
+    }
+
+    void PrintDebugState(DaisyPetal &hw) {
+        hw.seed.PrintLine("  Grains:");
+        hw.seed.PrintLine("");
+        hw.seed.PrintLine("  State | Start Pos | End Pos | Rate (st) | Duration (ms) | Env Atk (s)");
+        for (size_t i = 0; i < grains_.size(); ++i) {
+            grains_[i].PrintDebugState(hw);
+            hw.seed.PrintLine("");
         }
     }
 

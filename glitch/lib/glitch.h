@@ -50,6 +50,7 @@ struct GrainEvent {
     float dur_ms;
     float env_atk;
     bool skipped;
+    bool fwd;
 };
 
 class GrainPattern {
@@ -138,15 +139,17 @@ public:
     }
 
     float WrapPos(float pos) {
-        while (pos < 0.f) pos += frames_;
-        while (pos >= frames_) pos -= frames_;
+        while (pos < 0.f) {
+            pos += frames_;
+        }
+        while (pos >= frames_) {
+            pos -= frames_;
+            poker_.ResetIndex();
+        }
         return pos;
     }
 
     void TriggerGlitch() {
-        // lock the current pos as the glitch start position
-        glitch_start_pos_ = WrapPos(wpos_ - (glitch_dur_  * sr_ * 0.001f));
-
         // configure the metro, trigger the metro
         clock_.Reset();
         clock_idx_ = 0;
@@ -197,10 +200,6 @@ public:
             wpos_ = WrapPos(wpos_); // wrap around if needed
         }
 
-        if (!(freeze_ && enabled_)) {
-            glitch_start_pos_ = wpos_;
-        }
-
         // // check the clock to see if we need to trigger a glitch
         uint8_t clock_tick = clock_.Process();
         if (clock_tick) clock_idx_++; // increment the clock index
@@ -231,17 +230,15 @@ public:
             float rate = powf(2, rate_st / 12.f);
             
             // BEGIN CALCULATE start_pos
-            float start_pos = glitch_start_pos_;
             // adjust start position depending on the rate we sampled
             if (rate > 1.f || overlap_ > 1.f) {
-                start_pos += (glitch_dur_ * sr_ * 0.001f); // for arithmetic, go to the original "end of grain"
                 // now, move back by the amount we will play during the grain
                 // `duration` already takes overlap into account, so we just need to account for rate
-                start_pos -= ((duration * 0.001f) * sr_ * rate);
-                start_pos = WrapPos(start_pos);
+                glitch_start_pos_ = WrapPos(wpos_ - ((duration * 0.001f) * sr_ * rate));
             }
             // apply spread to the start position // (only to the past as to not go out of bounds)
-            start_pos = WrapPos(start_pos + (randf(-spread_, 0.f) * frames_));
+            float start_pos = glitch_start_pos_;
+            start_pos = WrapPos(start_pos - (frames_ * mem_) + (randf(-spread_, 0.f) * frames_ * mem_));
             // END CALCULATE start_pos
 
             // decide if we should skip this grain based on rskip probability
@@ -254,8 +251,7 @@ public:
                 .rate_st = rate_st, 
                 .dur_ms = duration, 
                 .env_atk = env_atk_amt_,
-                .skipped = skip
-            };
+                .skipped = skip};
             if (pattern_mode_) {
                 pattern_.ProcessEvent(event); // process the event through the pattern
             }
@@ -265,7 +261,7 @@ public:
             } else {
                 just_triggered_ = false;
                 grains_.TriggerGrain(
-                    /*pos_samples=*/ event.pos_samples, 
+                    /*pos_samples=*/ event.pos_samples, // always override start pos 
                     /*rate_st=*/ event.rate_st,
                     /*dur_ms=*/ event.dur_ms,
                     /*env_atk=*/ event.env_atk,
@@ -296,6 +292,12 @@ public:
         pattern_.Reset();
     }
 
+    // set glitch memory (how far to look back in time during playback)
+    void SetGlitchMemory(float mem) {
+        mem_ = fclamp(mem, 0.0, 1.0);
+    }
+
+
     void SetGlitchParams(float glitch_dur, float rskip, float spread, 
                          float pitch, float pitch_spread, float level, 
                          float env_atk_amt, bool freeze, float overlap) {
@@ -314,13 +316,12 @@ public:
 
     void PrintDebugState(daisy::DaisyPetal &hw){
         hw.seed.PrintLine("Glitch Engine State:");
-        hw.seed.PrintLine("  Sample Rate: %f", sr_);
-        hw.seed.PrintLine("  Buffer Frames: %d", frames_);
+        // hw.seed.PrintLine("  Sample Rate: %f", sr_);        // hw.seed.PrintLine("  Buffer Frames: %d", frames_);
         hw.seed.PrintLine("  Write Position: %f", wpos_);
         hw.seed.PrintLine("  Enabled: %d", enabled_);
         hw.seed.PrintLine("  Glitch Start Position: %f", glitch_start_pos_);
         hw.seed.PrintLine("  Glitch Duration: %f", glitch_dur_);
-        hw.seed.PrintLine("  Rskip Probability: %f", rskip_);
+        // hw.seed.PrintLine("  Rskip Probability: %f", rskip_);
         hw.seed.PrintLine("  Spread: %f", spread_);
         hw.seed.PrintLine("  Pitch: %f", pitch_);
         hw.seed.PrintLine("  Pitch Spread: %f", pitch_spread_);
@@ -339,6 +340,11 @@ public:
         hw.seed.PrintLine("  Pattern Mode: %d", pattern_mode_);
         hw.seed.PrintLine("  Pattern Length: %d", pattern_.GetPatternLength());
         hw.seed.PrintLine("  Pattern Index: %d", pattern_.GetPatternIndex());
+
+        // print the debug state of each grain
+        hw.seed.PrintLine("  Grains:");
+        grains_.PrintDebugState(hw);
+        hw.seed.PrintLine("  ");
     }
 
     Metro & clock() {
@@ -352,7 +358,11 @@ public:
     };
 
     void SetPitchSpreadType(PitchSpreadType type) {
-        pitch_spread_type_ = type;
+        if (type != pitch_spread_type_) {
+            pitch_spread_type_ = type;
+            // reset pattern
+            ResetPattern();
+        }
     }
 
 private:
@@ -360,6 +370,9 @@ private:
     float *buf_;
     size_t frames_;
     size_t chans_;
+
+    float mem_; // 0.0->1.0 -- how far to look back, aka "scan"
+    float rand_direction_; // random direction: 0.0 - all fwd, 0.5 - fwd/rev, 1.0 - all rev
 
     std::vector<float> sig_; // signal buffer for processing
 

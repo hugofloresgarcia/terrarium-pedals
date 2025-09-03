@@ -217,6 +217,50 @@ public:
         }
     }
 
+//     inline const T ReadHermite(float delay) const
+// {
+// int32_t delay_integral   = static_cast<int32_t>(delay);
+// float   delay_fractional = delay - static_cast<float>(delay_integral);
+
+// int32_t     t     = (write_ptr_ + delay_integral + max_size);
+// const T     xm1   = line_[(t - 1) % max_size];
+// const T     x0    = line_[(t) % max_size];
+// const T     x1    = line_[(t + 1) % max_size];
+// const T     x2    = line_[(t + 2) % max_size];
+// const float c     = (x1 - xm1) * 0.5f;
+// const float v     = x0 - x1;
+// const float w     = c + v;
+// const float a     = w + v + (x2 - x0) * 0.5f;
+// const float b_neg = w + a;
+// const float f     = delay_fractional;
+// return (((a * f) - b_neg) * f + c) * f + x0;
+// }
+
+    void PeekHermite(float index, float* out) {
+        // wrap index
+        while (index < 0.f) index += frames_;
+        while (index >= frames_) index -= frames_;
+
+        for (size_t chan = 0; chan < chans_; ++chan) {
+            size_t i_idx = (size_t)index;
+            
+            float a, b, c, d, cminusb, frac;
+            if (i_idx < 1) i_idx = 1, frac = 0.f;
+            else if (i_idx > frames_ - 1) i_idx = frames_ - 1, frac = 1.f;
+            else frac = index - i_idx;
+
+            a = buf_[((i_idx - 1) % frames_) * chans_ + chan];
+            b = buf_[((i_idx    ) % frames_) * chans_ + chan];
+            c = buf_[((i_idx + 1) % frames_) * chans_ + chan];
+            d = buf_[((i_idx + 2) % frames_) * chans_ + chan];
+            cminusb = c - b;
+
+            out[chan] = b + frac * (cminusb - 0.1666667f * (1.f - frac) * 
+                ((d - a - 3.0f*cminusb) * frac +  (d + 2.0f*a - 3.0f*b))
+            );
+        }
+    }
+
 
 private:
     // buffer

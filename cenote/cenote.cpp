@@ -309,7 +309,7 @@ int main(void)
     while(1)
     {
         // Do lower priority stuff infinitely here
-        hw.seed.PrintLine("Vibrato LFO Depth: %d ", int(knob4.Value() * 1000));
+        // hw.seed.PrintLine("Vibrato LFO Depth: %d ", int(knob4.Value() * 1000));
         System::Delay(10);
     }
 }
