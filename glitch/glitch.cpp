@@ -403,8 +403,8 @@ void callback(
         // }
 
         limiter.ProcessBlock(glitch_out, CHANS, 1.0);
-        
-        xfade.ProcessFrame(s_in, glitch_out, s_out);
+
+        s_out[0] = xfade.Process(s_in[0], glitch_out[0]);
 
         out[i] = s_out[0];
         // out[i] = s_in[0] + glitch_out[0];
@@ -480,8 +480,8 @@ int main(void)
     glitch.Init(sr, buf, BUF_SIZE, CHANS);
     hw.seed.PrintLine("Initialized glitch engine with buffer size %d and %d channels", BUF_SIZE, CHANS);
     
-    xfade.Init(sr, CHANS, 10.0f);
-    xfade.SetCrossfadeType(Xfade::TYPE::EQ_POWER); // default to power crossfade
+    xfade.Init(sr, 10.0f);
+    xfade.SetCrossfadeType(Xfade::TYPE::ASYMMETRIC_MIX); // default to power crossfade
     hw.seed.PrintLine("Initialized xfade with %d channels", CHANS);
 
     limiter.Init();

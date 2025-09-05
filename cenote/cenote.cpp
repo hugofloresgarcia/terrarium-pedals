@@ -4,6 +4,7 @@
 
 #include "lib/cenote_delay.h"
 #include "vibrato.h"
+#include "xfade.h"
 #include "lib/control_recorder.h"
 // #include "lib/settings.h"
 
@@ -11,9 +12,27 @@ using namespace daisy;
 using namespace daisysp;
 using namespace terrarium;
 
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// GLOBALS - HARDWARE
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 constexpr static float kMomentaryFswTimeMs = 300.0f; // Time to hold footswitch for momentary bypass mode
 static constexpr float kShiftMaxLarge = 150.0f; // 150 hz if sw3 is pressed
 static constexpr float kShiftMaxSmall = 15.0f; // 15 hz if sw3 is not pressed
+
+
+// Declare a global daisy_petal for hardware access
+DaisyPetal  hw;
+
+Led         led1, led2;
+Parameter   knob2, // delay time
+            knob3, // feedback
+            knob6,  // level
+            knob4,  // vibrato depth
+            knob1,  // vibrato rate
+            knob5;  // shift amount
+
 
 struct FswState {
     bool state = false; // the "virtual" state of the footswitch
@@ -38,18 +57,9 @@ struct FswState {
 
 };
 
-// GLOBALS
-
-// Declare a global daisy_petal for hardware access
-DaisyPetal  hw;
-
-Led         led1, led2;
-Parameter   knob2, // delay time
-            knob3, // feedback
-            knob6,  // level
-            knob4,  // vibrato depth
-            knob1,  // vibrato rate
-            knob5;  // shift amount
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// GLOBALS - DSP
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 CenoteDelayEngine del;
 VibratoEngine vibrato; // Two engines for stereo vibrato
@@ -57,6 +67,8 @@ Oscillator updown_lfo; // Up/Down LFO for freqshift
 
 Line bypass_ramp; // Ramp for bypassing the delay
 float ramp_time_ms = 25.0f;
+
+Xfade xfade;
 
 bool prev_bypass_state = false; // Previous bypass state for ramping
 
@@ -67,6 +79,9 @@ TerrariumState s;
 // State for footswitches
 FswState fsw1, fsw2; // Footswitch states
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// HARDWARE
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 void processFootSwitches(FswState &fsw1, FswState &fsw2) {
 
@@ -143,10 +158,14 @@ void processFootSwitches(FswState &fsw1, FswState &fsw2) {
 }
 
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// CONTROL BLOCK
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 /*
  * Process terrarium pots and switches
  */
-void processTerrariumControls() {
+void controlBlock() {
     // update footswitches
     processFootSwitches(fsw1, fsw2);
 
@@ -209,7 +228,16 @@ void processTerrariumControls() {
     led1.Update();
     led2.Update();
 
+    xfade.SetCrossfade(
+        (fsw1.state || fsw2.state) ? 
+        knob6.Value() : 0.0f
+    );
+
 }
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// AUDIO BLOCK
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 /*
  * This runs at a fixed rate, to prepare audio samples
@@ -221,7 +249,7 @@ void callback(
     )
 {
     hw.ProcessAllControls();
-    processTerrariumControls();
+    controlBlock();
 
     float del_out;
     float sig;
@@ -230,40 +258,42 @@ void callback(
     bool new_bypass_state = (fsw1 || fsw2);
     if (new_bypass_state != prev_bypass_state) {
         // Bypass state changed, ramp the bypass
-        if (new_bypass_state) {
-            bypass_ramp.Start(0.0f, 1.0f, ramp_time_ms * 0.001f); // ramp up to 1.0
-        } else {
-            bypass_ramp.Start(1.0f, 0.0f, ramp_time_ms * 0.001f); // ramp down to 0.0
-        }
+        bypass_ramp.Start(
+            (u_int8_t)prev_bypass_state, 
+            (u_int8_t)new_bypass_state, 
+            ramp_time_ms * 0.001f
+        );
         prev_bypass_state = new_bypass_state;
     }
 
+    uint8_t ramp_finished;
     for(size_t i = 0; i < size; i += 2)
     {
         sig = in[i];
 
         // vibrato is always on
         sig = vibrato.Process(sig);
-    
-        if (new_bypass_state) {
-            delay_in = sig;
-        } else {
-            delay_in = 0.0f; 
-        }
         
         // process delay
-        del_out = del.Process(delay_in, /*clip=*/true, /*limit=*/fsw2);
+        delay_in = sig * bypass_ramp.Process(&ramp_finished); // ramp the input to the delay
+        del_out = del.Process(
+            delay_in, 
+            /*clip=*/true, 
+            /*limit=*/fsw2
+        ) * knob6.Value();
 
-        del_out = knob6.Value() * del_out; // apply level control
-        
         // mix delay
-        sig = sig + del_out * 1.5f; // little oomph
-        
+        sig = xfade.Process(sig * 1.414f, del_out * 1.414f); // little oomph
+
         // softclip out
         out[i] = SoftClip(sig); // Soft clipping
 
     }
 }
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// ENTRY POINT
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 int main(void)
 {
@@ -276,7 +306,7 @@ int main(void)
     // according to the interwebs, the noise drops an octave every time the block size is doubled.
     // 2 is out of the nyquist range, so its filtered out. 
     // see https://github.com/bkshepherd/DaisySeedProjects/issues/9
-    hw.SetAudioBlockSize(2); 
+    hw.SetAudioBlockSize(2);  
     hw.seed.StartLog(false);
 
     led1.Init(hw.seed.GetPin(Terrarium::LED_1), false);
@@ -286,7 +316,7 @@ int main(void)
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
     knob2.Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::EXPONENTIAL);
     knob3.Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob6.Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob6.Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
     knob1.Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
     knob4.Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
     knob5.Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR);
@@ -302,8 +332,12 @@ int main(void)
     updown_lfo.Reset(0.0f); // Reset to 0 phase
 
     bypass_ramp.Init(sr);
+    bypass_ramp.Start(0.0f, 0.0f, ramp_time_ms * 0.001f);
 
     control_recorder.Init(); // Initialize control recorder
+
+    xfade.Init(sr, 10.0f);
+    xfade.SetCrossfadeType(Xfade::TYPE::EQ_POWER); // default to power crossfade
 
     hw.StartAdc();
     hw.StartAudio(callback);
