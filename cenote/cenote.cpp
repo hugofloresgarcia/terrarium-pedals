@@ -38,6 +38,8 @@ struct FswState {
 
 };
 
+// GLOBALS
+
 // Declare a global daisy_petal for hardware access
 DaisyPetal  hw;
 

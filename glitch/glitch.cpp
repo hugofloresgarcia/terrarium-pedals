@@ -501,7 +501,7 @@ int main(void)
     while(1)
     {
         // Do lower priority stuff infinitely here
-        System::Delay(400);
+        System::Delay(100);
         // print sig
         // PrintSignal(s_in, CHANS);
         // // hw.seed.PrintLine("");
@@ -514,17 +514,17 @@ int main(void)
         // ledw2.PrintDebugState(hw);
         // hw.seed.PrintLine("");
 
-        if (i % 2 == 0) {
-            hw.seed.PrintLine("");
-            glitch.PrintDebugState(hw);
-            hw.seed.PrintLine("");
-            hw.seed.PrintLine("");
+        // if (i % 2 == 0) {
+        hw.seed.PrintLine("---------------");
+        glitch.PrintDebugState(hw);
+        hw.seed.PrintLine("");
+        hw.seed.PrintLine("");
             // hw.seed.PrintLine("Tap Tempo ms %f", tap_tempo.GetPeriodMs());
             // hw.seed.PrintLine("tapped; %d", tapped);
             // if (tapped) { tapped = false; }
             // tap_tempo.PrintDebugState(hw);
-        }
-        i++;
+        // }
+        // i++;
         // // print if each knob has moved
         // knob_glitch_dur.PrintDebug(hw);
         // knob_glitch_spread.PrintDebug(hw);

@@ -7,7 +7,9 @@ using namespace daisy;
 using namespace daisysp;
 using namespace terrarium;
 
-// Declare a global daisy_petal for hardware access
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// GLOBALS - HARDWARE
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 DaisyPetal  hw;
 
 bool        sw1, sw2, sw3, sw4;
@@ -25,6 +27,16 @@ float sr;
 
 FswState   fsw1, fsw2; // footswitch states
 
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// GLOBALS - DSP
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// HARDWARE 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 void processFootSwitches(FswState &fsw1, FswState &fsw2) {
     fsw1.pressed = hw.switches[Terrarium::FOOTSWITCH_1].Pressed();
@@ -96,6 +108,18 @@ void processTerrariumControls() {
     hw.seed.PrintLine("FSW1: %d", fsw1);
 }
 
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// CONTROL LOOP
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// AUDIO LOOP
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 /*
  * This runs at a fixed rate, to prepare audio samples
  */
@@ -127,6 +151,11 @@ void callback(
         }
     }
 }
+
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// ENTRYPOINT
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 int main(void)
 {
