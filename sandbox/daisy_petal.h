@@ -1,10 +1,8 @@
 #pragma once
 #include <array>
 
+#define DSY_SDRAM_BSS
 namespace daisy {
-
-
-
 
 class Switch {
 public:
@@ -29,6 +27,7 @@ public:
     void Init(...) {}
     float Value() const { return val; }
     float Process()     { return val; } // return current value
+    float GetRawFloat() const { return val; } // return current value
 };
 
 class Parameter {
@@ -72,7 +71,6 @@ public:
 
     float Value() const { return val_; }
 
-
     bool Moved() const { return false; } // stub; optional
 
 private:
@@ -91,11 +89,23 @@ private:
 class DaisySeed {
   public:
     void StartLog(bool) {}
-    void PrintLine(const char*, ...) {}
     float AudioSampleRate() const { return 48000.f; }
     void SetAudioBlockSize(size_t) {}
     // <-- add this so cenote.cpp compiles:
     int GetPin(int /*which*/) const { return 0; } // dummy pin id
+    void Print(const char* fmt, ...) {
+        va_list args;
+        va_start(args, fmt);
+        vprintf(fmt, args);
+        va_end(args);
+    }
+    void PrintLine(const char* fmt, ...) {
+        va_list args;
+        va_start(args, fmt);
+        vprintf(fmt, args);
+        printf("\n");
+        va_end(args);
+    }
 };
 
 class DaisyPetal {
@@ -116,17 +126,34 @@ struct AudioHandle {
 };
 
 
-// 2) Minimal Led stub
+// ---- Upgraded LED stub (emulator + hardware API parity) ----
 class Led {
 public:
-    void Init(int /*pin*/, bool /*inverted*/) {}
-    void Set(float /*v*/) {}
-    void Update() {}
+    void Init(int /*pin*/, bool inverted) { inverted_ = inverted; }
+    void Set(float v)
+    {
+        // clamp 0..1 and apply inversion
+        v = (v < 0.f ? 0.f : (v > 1.f ? 1.f : v));
+        level_ = inverted_ ? (1.f - v) : v;
+        dirty_.store(true, std::memory_order_release);
+    }
+    void Update() {} // no-op in emulator
+
+    // Emulator helpers:
+    float Level() const { return level_; } // 0..1
+    bool  ConsumeDirtyFlag() { return dirty_.exchange(false, std::memory_order_acq_rel); }
+
+private:
+    float level_ = 0.0f;
+    bool  inverted_ = false;
+    std::atomic<bool> dirty_{ false };
 };
+
 
 // 3) Minimal System::Delay
 namespace System {
 inline void Delay(int /*ms*/) {}
+inline uint32_t GetNow() { return 0; } // stub; optional
 }
 
 

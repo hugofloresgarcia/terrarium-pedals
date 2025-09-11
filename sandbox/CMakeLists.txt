@@ -19,12 +19,13 @@ set_target_properties(DaisySandbox PROPERTIES
 )
 
 target_sources(DaisySandbox PRIVATE
+    daisy_petal.h
     Main.cpp
-    FakeDaisyPetal.h
     SandboxedPedal.h
 )
 
 target_include_directories(DaisySandbox PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ../cenote          # your pedal sources
     ../flib            # add this so cenote.cpp can find flib headers
     ../Terrarium       # if you also need the Terrarium headers

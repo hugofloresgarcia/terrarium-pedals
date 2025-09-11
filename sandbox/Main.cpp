@@ -21,6 +21,34 @@ struct SwitchSimState {
     }
 };
 
+class LedWidget : public juce::Component
+{
+public:
+    void setColour(juce::Colour c) { colour = c; repaint(); }
+    void setLevel(float v)
+    {
+        v = juce::jlimit(0.0f, 1.0f, v);
+        if (std::abs(v - level) > 1e-4f) { level = v; repaint(); }
+    }
+
+    void paint(juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced(2.0f);
+        // brighten with level; keep some base glow so OFF is still visible slightly if you want
+        auto fill = colour.withMultipliedBrightness(0.2f + 0.8f * level)
+                           .withAlpha(0.7f + 0.3f * level);
+        g.setColour(fill);
+        g.fillEllipse(r);
+
+        g.setColour(juce::Colours::black.withAlpha(0.6f));
+        g.drawEllipse(r, 1.5f);
+    }
+
+private:
+    float level = 0.0f;
+    juce::Colour colour = juce::Colours::red;
+};
+
 class MomentaryButton : public juce::TextButton
 {
 public:
@@ -102,6 +130,11 @@ public:
         };
 
         addAndMakeVisible(audioSettingsBtn);
+
+        addAndMakeVisible(ledUI1);
+        addAndMakeVisible(ledUI2);
+        ledUI1.setColour(juce::Colours::chartreuse);
+        ledUI2.setColour(juce::Colours::orange);
 
         setSize(900, 420);
 
@@ -219,11 +252,16 @@ public:
     {
         auto area = getLocalBounds().reduced(10);
 
-        // Top row: Audio Settings button
+        // top: audio settings
         auto top = area.removeFromTop(32);
         audioSettingsBtn.setBounds(top.removeFromLeft(160));
 
-        // Knobs + labels
+        // show LEDs on the top right
+        auto ledBox = top.removeFromRight(80);
+        ledUI1.setBounds(ledBox.removeFromLeft(36).reduced(6));
+        ledUI2.setBounds(ledBox.removeFromLeft(36).reduced(6));
+
+        // knobs
         auto row = area.removeFromTop(160);
         auto cellW = row.getWidth() / 6;
         for (int i = 0; i < 6; ++i)
@@ -233,13 +271,13 @@ public:
             knobs[i]->setBounds(cell);
         }
 
-        // Switches
+        // switches
         auto mid = area.removeFromTop(60);
         auto swCell = mid.getWidth() / 6;
         for (int i = 0; i < 4; ++i)
             switches[i]->setBounds(mid.removeFromLeft(swCell).reduced(8));
 
-        // Footswitches
+        // footswitches
         auto bot = area;
         auto fsW = bot.getWidth() / 2;
         footswitches[0]->setBounds(bot.removeFromLeft(fsW).reduced(8));
@@ -260,6 +298,7 @@ private:
     bool fsDown[2] { false, false };
     SwitchSimState simSW[4];
     SwitchSimState fsSim[2];
+    LedWidget ledUI1, ledUI2;
 };
 
 // -------- App boilerplate --------
