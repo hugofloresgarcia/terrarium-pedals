@@ -4,7 +4,7 @@
 
 #include "lib/cenote_delay.h"
 #include "vibrato.h"
-// #include "xfade.h"
+#include "xfade.h"
 #include "lib/control_recorder.h"
 // #include "lib/settings.h"
 
