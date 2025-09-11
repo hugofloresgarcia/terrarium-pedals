@@ -5,12 +5,11 @@
 #include "lib/glitch.h"
 #include "hw/ledwrap.h"
 #include "hw/shiftknobman.h"
+#include "hw/knob.h"
 #include "fsw.h"
 #include "fmath.h"
-#include "knob.h"
 #include "xfade.h"
 #include "taptempo.h"
-
 
 #define BUF_SIZE (48000 * 10)  // 10 seconds of audio at 48kHz
 #define CHANS 1                // mono :(
@@ -320,6 +319,7 @@ void controlBlock() {
         glitch.StopGlitch();
     }
 
+
     // LED CONFIGS!
     if (takeover) { // notify user that the knob was taken over.
         ledw1.SetState(LedWrap::LedState::BLINK_SHORT, 500); // blink for 100ms on takeover
@@ -424,17 +424,12 @@ void PrintSignal(float* sig, size_t chans) {
 }
 
 
-// **************************************************
-// MAIN ENTRYPOINT
-// **************************************************
-
-int main(void)
-{
+void init() {
     hw.Init();
     hw.seed.StartLog(false);
 
     // print the qspi status
-    hw.seed.PrintLine("QSPI Status: %d", hw.seed.qspi.GetStatus());
+    // hw.seed.PrintLine("QSPI Status: %d", hw.seed.qspi.GetStatus());
     
     sr = hw.AudioSampleRate();
     hw.seed.SetAudioBlockSize(BLOCK_SIZE);
@@ -451,7 +446,7 @@ int main(void)
     knob_glitch_spread  .Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::LINEAR, sr);
     knob_pitch          .Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR, sr);
     knob_rskip          .Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR, sr);
-    knob_level          .Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::EXPONENTIAL, sr);
+    knob_level          .Init(hw.knob[Terrarium::KNOB_5], 0.0f, 1.0f, Parameter::LINEAR, sr);
     knob_env            .Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR, sr);
     
     hw.seed.PrintLine("Initializing stuff");
@@ -488,57 +483,31 @@ int main(void)
 
     filter.Init(sr);
 
+}
+// **************************************************
+// MAIN ENTRYPOINT
+// **************************************************
+
+#if !defined(BUILDING_FOR_EMULATOR)
+int main(void)
+{
+    init();
+
     hw.StartAdc();
     hw.StartAudio(callback);
 
-    // print: hello! 
-    // then, then number of channels in the main buffer, 
-    // load saved settings
-    // Load();
-    // hw.seed.PrintLine("Loaded saved settings");
 
     int i = 0;
     while(1)
     {
         // Do lower priority stuff infinitely here
         System::Delay(100);
-        // print sig
-        // PrintSignal(s_in, CHANS);
-        // // hw.seed.PrintLine("");
-        // hw.seed.Print("-");
-        // PrintSignal(s_out, CHANS);
-
-        // print the LEDW states
-        // ledw1.PrintDebugState(hw);
-        // hw.seed.PrintLine("");
-        // ledw2.PrintDebugState(hw);
-        // hw.seed.PrintLine("");
 
         // if (i % 2 == 0) {
         hw.seed.PrintLine("---------------");
         glitch.PrintDebugState(hw);
         hw.seed.PrintLine("");
         hw.seed.PrintLine("");
-            // hw.seed.PrintLine("Tap Tempo ms %f", tap_tempo.GetPeriodMs());
-            // hw.seed.PrintLine("tapped; %d", tapped);
-            // if (tapped) { tapped = false; }
-            // tap_tempo.PrintDebugState(hw);
-        // }
-        // i++;
-        // // print if each knob has moved
-        // knob_glitch_dur.PrintDebug(hw);
-        // knob_glitch_spread.PrintDebug(hw);
-        // knob_pitch.PrintDebug(hw);
-        // knob_rskip.PrintDebug(hw);
-        // knob_level.PrintDebug(hw);
-        // knob_env.PrintDebug(hw);
-
-        // if(trigger_save) {
-        //     // saved_settings.Save(); // Writing locally stored settings to the external flash
-        //     trigger_save = false;
-        // }
-        // System::Delay(1000);
     }
-
-
 }
+#endif
