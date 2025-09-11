@@ -5,7 +5,6 @@
 #ifdef __cplusplus
 
 #include "daisysp.h"
-#include "daisy_petal.h"
 
 #include "stack.h"
 

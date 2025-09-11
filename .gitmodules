@@ -7,3 +7,9 @@
 [submodule "Terrarium"]
 	path = Terrarium
 	url = https://github.com/PedalPCB/Terrarium
+[submodule "cenote/JUCE"]
+	path = cenote/JUCE
+	url = https://github.com/juce-framework/JUCE.git
+[submodule "JUCE"]
+	path = JUCE
+	url = https://github.com/juce-framework/JUCE.git

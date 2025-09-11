@@ -3,8 +3,8 @@
 #include "terrarium.h"
 
 #include "lib/glitch.h"
-#include "ledwrap.h"
-#include "shiftknobman.h"
+#include "hw/ledwrap.h"
+#include "hw/shiftknobman.h"
 #include "fsw.h"
 #include "fmath.h"
 #include "knob.h"

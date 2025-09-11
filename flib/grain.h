@@ -6,7 +6,6 @@
 
 #include "daisysp.h"
 #include "ipoke.h"
-#include "daisy_petal.h"
 #include <array>
 
 using namespace daisy;

@@ -3,13 +3,8 @@
 #ifndef H_STATE_H
 #define H_STATE_H
 
-#include "daisy_seed.h"
-#include "daisysp.h"
 
-using namespace daisy;
-using namespace daisysp;
-
-namespace daisysp
+namespace terrarium
 {
 
 struct TerrariumState {

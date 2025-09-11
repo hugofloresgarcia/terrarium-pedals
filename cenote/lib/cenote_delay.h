@@ -5,11 +5,9 @@
 
 #include <cmath>
 #include <cstdint>
-#include "daisy_seed.h"
 #include "daisysp.h"
 #include "freqshift.h"
 
-using namespace daisy;
 using namespace daisysp;
 
 namespace daisysp
