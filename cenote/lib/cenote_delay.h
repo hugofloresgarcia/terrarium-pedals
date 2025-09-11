@@ -130,7 +130,7 @@ class CenoteDelayEngine
 
   private:
     float sample_rate_;
-    static constexpr int32_t kDelayLength = 1.5 * 48000; // enough for ~2 s @48kHz 
+    static constexpr int32_t kDelayLength = 1.5 * 48000; // enough for ~1.5 s @48kHz
 
     FrequencyShifter freqshifter_; 
     bool bypass_freqshift_ = false; // Bypass frequency shifting

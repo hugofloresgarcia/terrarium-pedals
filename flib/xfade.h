@@ -49,7 +49,7 @@ public:
                 wa_ = 1.0f;
                 wb_ = val_ * 2.f;
             } else {
-                wa_ = (val_ - 0.5f) * 2.f;
+                wa_ = (1 - ((val_-0.5f)*2.f));
                 wb_ = 1.0f;
             }
         }

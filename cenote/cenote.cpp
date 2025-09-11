@@ -4,7 +4,7 @@
 
 #include "lib/cenote_delay.h"
 #include "vibrato.h"
-#include "xfade.h"
+// #include "xfade.h"
 #include "lib/control_recorder.h"
 // #include "lib/settings.h"
 
@@ -20,6 +20,9 @@ using namespace terrarium;
 constexpr static float kMomentaryFswTimeMs = 300.0f; // Time to hold footswitch for momentary bypass mode
 static constexpr float kShiftMaxLarge = 150.0f; // 150 hz if sw3 is pressed
 static constexpr float kShiftMaxSmall = 15.0f; // 15 hz if sw3 is not pressed
+
+#define MAX_DELAY_MS_LARGE 1500.0f
+#define MAX_DELAY_MS_SMALL 112.5f
 
 
 // Declare a global daisy_petal for hardware access
@@ -200,8 +203,10 @@ void controlBlock() {
     // control_recorder.Process(s);
 
     // set knob2 to delay time
-    float delay_time_mult = s.sw3 ? 1.0f : 0.075f; // 0.5x if sw3 is pressed, otherwise 1.0x
-    del.SetDelayMs(s.pot2 * del.GetMaxDelayMs() * delay_time_mult); //
+    // del.SetDelayMs(s.pot2 * del.GetMaxDelayMs() * delay_time_mult); //
+    del.SetDelayMs(
+        s.pot2 * (s.sw3 ? MAX_DELAY_MS_LARGE : MAX_DELAY_MS_SMALL) // sw3 selects large or small delay
+    );
 
     // set knob3 to feedback
     del.SetFeedback(
@@ -283,7 +288,7 @@ void callback(
         ) * knob6.Value();
 
         // mix delay
-        sig = xfade.Process(sig * 1.414f, del_out * 1.414f); // little oomph
+        sig = xfade.Process(sig, del_out * 1.414f); // little oomph
 
         // softclip out
         out[i] = SoftClip(sig); // Soft clipping
@@ -315,7 +320,7 @@ int main(void)
     // Initialize your knobs here like so:
     // https://electro-smith.github.io/libDaisy/classdaisy_1_1_parameter.html
     knob2.Init(hw.knob[Terrarium::KNOB_2], 0.0f, 1.0f, Parameter::EXPONENTIAL);
-    knob3.Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::EXPONENTIAL);
+    knob3.Init(hw.knob[Terrarium::KNOB_3], 0.0f, 1.0f, Parameter::LINEAR);
     knob6.Init(hw.knob[Terrarium::KNOB_6], 0.0f, 1.0f, Parameter::LINEAR);
     knob1.Init(hw.knob[Terrarium::KNOB_1], 0.0f, 1.0f, Parameter::LINEAR);
     knob4.Init(hw.knob[Terrarium::KNOB_4], 0.0f, 1.0f, Parameter::LINEAR);
@@ -337,7 +342,7 @@ int main(void)
     control_recorder.Init(); // Initialize control recorder
 
     xfade.Init(sr, 10.0f);
-    xfade.SetCrossfadeType(Xfade::TYPE::EQ_POWER); // default to power crossfade
+    xfade.SetCrossfadeType(Xfade::TYPE::ASYMMETRIC_MIX); // default to power crossfade
 
     hw.StartAdc();
     hw.StartAudio(callback);
