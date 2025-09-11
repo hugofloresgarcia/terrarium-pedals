@@ -240,7 +240,8 @@ public:
         //     << " timeHeld=" << hw.switches[Terrarium::FOOTSWITCH_2].timeHeld
         //     << " rising=" << hw.switches[   Terrarium::FOOTSWITCH_2].rising
         //     << " falling=" << hw.switches[Terrarium::FOOTSWITCH_2].falling<<std::endl;
-
+        ledUI1.setLevel(led1.Level());
+        ledUI2.setLevel(led2.Level());
 
 
         // run the pedal’s control loop (which consumes RisingEdge/FallingEdge)
