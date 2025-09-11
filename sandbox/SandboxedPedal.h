@@ -1,6 +1,5 @@
-#define BUILDING_FOR_EMULATOR
-// #include "../cenote/cenote.cpp"
-#include "../glitch/glitch.cpp"
+#include "../cenote/cenote.cpp"
+// #include "../glitch/glitch.cpp"
 
 // When building for the JUCE sandbox, we expose setup/control/audio instead of main().
 namespace sandbox {
