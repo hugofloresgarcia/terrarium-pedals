@@ -1,9 +1,5 @@
-#if defined(BUILDING_FOR_EMULATOR)
-    #include "../sandbox/FakeDaisyPetal.h"
-#else
-    #include "daisy_petal.h"
-#endif
-    
+#include "daisy_petal.h"
+
 #include "terrarium.h"
 #include "daisysp.h"
 
@@ -134,11 +130,6 @@ void processFootSwitches(FswState &fsw1, FswState &fsw2) {
         fsw2.state = false; // disengage bypass mode
     }
 
-    // std::cout if we have a rising edge on either fsw
-    if (fsw1.rising)  std::cout<<"FSW1 rising"<<std::endl;
-    if (fsw1.falling) std::cout<<"FSW1 falling"<<std::endl;
-    if (fsw2.rising)  std::cout<<"FSW2 rising"<<std::endl;
-    if (fsw2.falling) std::cout<<"FSW2 falling"<<std::endl;
 }
 
 
@@ -228,26 +219,7 @@ void callback(
 {
     hw.ProcessAllControls();
     controlBlock();
-    // print all pot values once per second
-    static int counter = 0;
-    if (counter++ >= 48000 / size) {
-        counter = 0;
-        std::cout<<"Pots: "
-            <<knob1.Value()<<", "
-            <<knob2.Value()<<", "
-            <<knob3.Value()<<", "
-            <<knob4.Value()<<", "
-            <<knob5.Value()<<", "
-            <<knob6.Value()
-            <<std::endl;
 
-        // print bypass ramp value
-        uint8_t dummy;
-        std::cout<<"Bypass ramp: "<<bypass_ramp.Process(&dummy)<<std::endl;
-
-        // print xfade crossfade amount
-        std::cout<<"Xfade amount: "<<xfade.Process(1.0f, 0.0f)<<std::endl;
-    }
 
     float del_out;
     float sig;
@@ -255,7 +227,6 @@ void callback(
 
     bool new_bypass_state = (fsw1 || fsw2);
     if (new_bypass_state != prev_bypass_state) {
-        std::cout<<"bypass state changed"<<std::endl;
         // Bypass state changed, ramp the bypass
         bypass_ramp.Start(
             (uint8_t)prev_bypass_state, 
